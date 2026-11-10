@@ -1,0 +1,88 @@
+{
+  "_comment": "Copy to otlab.json and edit. host.ssh is how the workstation reaches the Proxmox node. host.power is optional: commands run over host.power.ssh to power the node on/off (leave empty if the node is always on). mgmt.isolation_probes are LAN addresses a scenario VM must NOT be able to reach; the acceptance tests check them.",
+  "host": {
+    "ssh": "root@10.0.20.12",
+    "power": {
+      "ssh": "",
+      "on": "",
+      "off": "",
+      "status": ""
+    }
+  },
+  "node": "pve-lab",
+  "storage": "local-zfs",
+  "forbidden_storage": [
+    "backup-pool"
+  ],
+  "bridge": "vmbr0",
+  "mgmt": {
+    "tag": 20,
+    "prefix": 24,
+    "gateway": "10.0.20.1",
+    "allow_ssh_from": {
+      "10.0.10.20": "admin workstation"
+    },
+    "isolation_probes": [
+      "10.0.20.1",
+      "10.0.20.12",
+      "10.0.10.1"
+    ]
+  },
+  "wan": {
+    "tag": 60,
+    "dns": [
+      "1.1.1.1",
+      "9.9.9.9"
+    ]
+  },
+  "plc": {
+    "tag": 90,
+    "subnet": "192.168.0.0/24",
+    "note": "optional physical PLC on an L2-only VLAN (no gateway). Leave plc_ip unset on every scenario if you have none."
+  },
+  "backup_window": {
+    "start": "01:30",
+    "end": "03:00"
+  },
+  "template": {
+    "vmid": 9200,
+    "name": "otlab-base",
+    "ip": "10.0.20.40",
+    "disk_gb": 12
+  },
+  "scenarios": {
+    "chem": {
+      "vmid": 9201,
+      "name": "otlab-chem",
+      "cores": 4,
+      "memory_mb": 8192,
+      "disk_gb": 60,
+      "ip": "10.0.20.41"
+    },
+    "elec": {
+      "vmid": 9202,
+      "name": "otlab-elec",
+      "cores": 4,
+      "memory_mb": 12288,
+      "disk_gb": 60,
+      "ip": "10.0.20.42"
+    },
+    "food": {
+      "vmid": 9203,
+      "name": "otlab-food",
+      "cores": 4,
+      "memory_mb": 8192,
+      "disk_gb": 50,
+      "ip": "10.0.20.43"
+    },
+    "oilgas": {
+      "vmid": 9204,
+      "name": "otlab-oilgas",
+      "cores": 4,
+      "memory_mb": 6144,
+      "disk_gb": 40,
+      "ip": "10.0.20.44",
+      "plc_ip": "192.168.0.250/24"
+    }
+  }
+}

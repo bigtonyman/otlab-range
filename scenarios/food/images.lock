@@ -1,0 +1,11 @@
+python@sha256:2d97f6910b16bd338d3060f261f53f144965f755599aab1acda1e13cf1731b1b
+debian@sha256:45ee40a844048c2f6d0105899c1a17733530b56d481612608aab5e2e4048570b
+eclipse-mosquitto@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
+frangoteam/fuxa@sha256:025e693971f72de9fabf2c811296f9dca3854dc501cb309b02302c7b94717d0f
+otlab/fd-sim:4cb500d5a8881b784a2b8b5ad38181f33be45a54-otlab1 (virtual-factory simulators, logging off, deps baked, on python@sha256:2d97f6910b16bd338d3060f261f53f144965f755599aab1acda1e13cf1731b1b)
+otlab/fd-openplc:1 (OpenPLC_v3 b4702061dc14d1024856f71b4543298d77007b88 on debian@sha256:45ee40a844048c2f6d0105899c1a17733530b56d481612608aab5e2e4048570b)
+otlab/fd-hmi:1 (frangoteam/fuxa@sha256:025e693971f72de9fabf2c811296f9dca3854dc501cb309b02302c7b94717d0f + modbus-serial@8.0.19)
+python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71
+otlab/ent:1 (overlay/enterprise on python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71, pymodbus==3.7.4, asyncua==1.1.5, alpine nftables/openssh/nmap)
+python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71
+otlab/site:1 (overlay/site on python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71, pymodbus==3.7.4, asyncua==1.1.5, alpine dnsmasq/chrony/rsyslog)

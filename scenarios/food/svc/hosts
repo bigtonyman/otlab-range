@@ -1,0 +1,7 @@
+# flamingmoes.lan: the bottling plant's OT zone, served by ot-svc01 (dnsmasq --addn-hosts, domain appended)
+10.213.30.5    ot-svc01
+10.213.30.10   plc01
+10.213.30.20   hmi01
+10.213.30.30   ows01
+10.213.30.40   opc01
+10.213.30.254  ot-fw

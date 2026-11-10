@@ -1,0 +1,10 @@
+*.qcow2
+*.img
+*.tar
+.env
+manifest.local.json
+__pycache__/
+captures/
+*.pcap
+otlab.json
+base/authorized_keys

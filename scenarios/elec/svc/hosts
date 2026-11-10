@@ -1,0 +1,9 @@
+# substation.lan: the substation's OT operations zone (10.30.30.0/24), served by ot-svc01 (dnsmasq --addn-hosts)
+10.30.30.2     ot-fw
+10.30.30.10    hmi01
+10.30.30.20    rtac01
+10.30.30.30    plc01
+10.30.30.31    ows01
+10.30.30.40    hist01
+10.30.30.50    gps01
+10.30.30.60    ot-svc01

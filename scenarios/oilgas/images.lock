@@ -1,0 +1,7 @@
+python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71
+frangoteam/fuxa@sha256:025e693971f72de9fabf2c811296f9dca3854dc501cb309b02302c7b94717d0f
+otlab/process-sim:458fea79166475fabaec2835678995d0d5639a13-otlab1 (upstream commit + PIPELINE_CV_BASE patch, on python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71, pymodbus==3.7.4)
+otlab/og-controller:1 (built from scenarios/oilgas/plc on python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71, pymodbus==3.7.4)
+otlab/og-svc:1 (built from scenarios/oilgas/svc on python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71, pymodbus==3.7.4, asyncua==1.1.5, alpine dnsmasq/chrony/rsyslog)
+otlab/og-hmi:1 (frangoteam/fuxa@sha256:025e693971f72de9fabf2c811296f9dca3854dc501cb309b02302c7b94717d0f + modbus-serial@8.0.19)
+otlab/ent:1 (overlay/enterprise on python@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71, pymodbus==3.7.4, asyncua==1.1.5, alpine nftables/openssh/nmap)

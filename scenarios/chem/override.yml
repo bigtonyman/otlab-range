@@ -1,0 +1,35 @@
+# otlab changes from upstream GRFICSv3 (GPL-3.0):
+# - macvlan parent is a dummy interface inside the VM, so OT segments never touch a real NIC
+# - every published port binds to 127.0.0.1 in the VM (reach them by SSH port-forward)
+# - router WireGuard publish removed; simulation no longer mounts the Docker socket
+# - no container restarts by itself
+services:
+  simulation:
+    restart: "no"
+    ports: !override ["127.0.0.1:8000:80"]
+    volumes: !reset []
+  plc:
+    restart: "no"
+    ports: !override ["127.0.0.1:8080:8080"]
+  ews:
+    restart: "no"
+    ports: !override ["127.0.0.1:6080:6080"]
+  hmi:
+    restart: "no"
+    ports: !override ["127.0.0.1:6081:8080"]
+  kali:
+    restart: "no"
+    ports: !override ["127.0.0.1:6088:6080"]
+  router:
+    restart: "no"
+    ports: !reset []
+  caldera:
+    restart: "no"
+    ports: !override ["127.0.0.1:8888:8888"]
+networks:
+  b-ics-net:
+    driver_opts:
+      parent: otlabot
+  c-dmz-net:
+    driver_opts:
+      parent: otlabot

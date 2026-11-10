@@ -1,0 +1,5 @@
+UPSTREAM_REPO=https://github.com/tonylturner/rangerdanger
+# Latest tagged release at build time; HEAD (32b2dcb) was unreleased, so images are pinned to the tag.
+UPSTREAM_REF=v0.1.31
+VERSION=v0.1.31
+PROJECT=rangerdanger

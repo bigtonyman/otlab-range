@@ -1,0 +1,167 @@
+# Food and beverage scenario: virtual-factory "Flaming Moe's" cocktail plant (Gradiant, MPL-2.0).
+# 21 Python simulator containers (tanks, valves, conveyor, process) -> Modbus/TCP -> OpenPLC -> FUXA HMI.
+# Sim-to-sim coordination runs over MQTT on an internal network that the PLC and HMI are not attached to.
+# otlab changes: pinned bases, pip deps baked into the image, python3 OpenPLC entrypoint, simulator logging off,
+# no OpenSearch, no docker-stats-logger, no buggable-cli.
+# Site services (overlay/site): OT infrastructure host (DNS flamingmoes.lan, NTP, syslog), OPC UA data server,
+# scripted operator workstation. Hostnames and addresses follow svc/hosts. Site clock: Alaska time.
+x-site: &site
+  TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+  NTP_HOST: 10.213.30.5
+  SYSLOG_HOST: 10.213.30.5
+  OT_BROADCAST: 10.213.30.255
+x-sim: &sim
+  image: otlab/fd-sim:${UPSTREAM_COMMIT}-otlab1
+  restart: "no"
+  depends_on: [mosquitto, openplc]
+  networks: [ot, simulators]
+services:
+  openplc:
+    image: otlab/fd-openplc:1
+    container_name: fd-plc
+    restart: "no"
+    entrypoint: ["/OpenPLC_v3/entrypoint.sh"]
+    volumes:
+      - ./build/plc:/OpenPLC_v3/scripts/config:ro
+    networks:
+      ot: { ipv4_address: 10.213.30.10 }
+  hmi:
+    image: otlab/fd-hmi:1
+    container_name: fd-hmi
+    hostname: hmi01
+    restart: "no"
+    environment:
+      TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+    ports: ["127.0.0.1:1881:1881"]
+    depends_on: [openplc]
+    networks:
+      ot: { ipv4_address: 10.213.30.20 }
+  mosquitto:
+    image: ${MOSQUITTO_IMAGE}
+    container_name: fd-mqtt
+    restart: "no"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks: [simulators]
+  infra:
+    image: otlab/site:1
+    container_name: fd-infra
+    hostname: ot-svc01
+    restart: "no"
+    init: true
+    command: [/opt/site/infra.sh]
+    environment:
+      TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+      SITE_DOMAIN: flamingmoes.lan
+      SITE_HOSTS: /opt/site/hosts
+      SITE_NTP_ALLOW: "10.213.30.0/24"
+    volumes: ["./svc/hosts:/opt/site/hosts:ro"]
+    networks:
+      ot: { ipv4_address: 10.213.30.5 }
+  opc:
+    image: otlab/site:1
+    container_name: fd-opc
+    hostname: opc01
+    restart: "no"
+    init: true
+    working_dir: /opt/site
+    command: [python3, -u, opc.py]
+    environment:
+      <<: *site
+      PLC_HOST: 10.213.30.10
+    volumes:
+      - ./svc/opc.py:/opt/site/opc.py:ro
+      - ./svc/resolv.conf:/etc/resolv.conf:ro
+    depends_on: [openplc, infra]
+    networks:
+      ot: { ipv4_address: 10.213.30.40 }
+  ops:
+    image: otlab/site:1
+    container_name: fd-ops
+    hostname: ows01
+    restart: "no"
+    init: true
+    working_dir: /opt/site
+    command: [python3, -u, ops.py]
+    environment:
+      <<: *site
+      HMI_URL: http://10.213.30.20:1881
+    volumes:
+      - ./svc/ops.py:/opt/site/ops.py:ro
+      - ./svc/resolv.conf:/etc/resolv.conf:ro
+    depends_on: [hmi, infra]
+    networks:
+      ot: { ipv4_address: 10.213.30.30 }
+  tequila:
+    <<: *sim
+    command: [flamingmoes/tequila.json]
+  tequilavalve:
+    <<: *sim
+    command: [flamingmoes/tequilavalve.json]
+  peppermint:
+    <<: *sim
+    command: [flamingmoes/peppermint.json]
+  peppermintvalve:
+    <<: *sim
+    command: [flamingmoes/peppermintvalve.json]
+  mintcream:
+    <<: *sim
+    command: [flamingmoes/mintcream.json]
+  mintcreamvalve:
+    <<: *sim
+    command: [flamingmoes/mintcreamvalve.json]
+  brandy:
+    <<: *sim
+    command: [flamingmoes/brandy.json]
+  brandyvalve:
+    <<: *sim
+    command: [flamingmoes/brandyvalve.json]
+  gin:
+    <<: *sim
+    command: [flamingmoes/gin.json]
+  ginvalve:
+    <<: *sim
+    command: [flamingmoes/ginvalve.json]
+  coughsyrup:
+    <<: *sim
+    command: [flamingmoes/coughsyrup.json]
+  coughsyrupvalve:
+    <<: *sim
+    command: [flamingmoes/coughsyrupvalve.json]
+  mixtank1:
+    <<: *sim
+    command: [flamingmoes/mixtank1.json]
+  mixtank1valve:
+    <<: *sim
+    command: [flamingmoes/mixtank1valve.json]
+  mixtank2:
+    <<: *sim
+    command: [flamingmoes/mixtank2.json]
+  mixtank2valve:
+    <<: *sim
+    command: [flamingmoes/mixtank2valve.json]
+  recolector:
+    <<: *sim
+    command: [flamingmoes/recolector.json]
+  recolectorvalve:
+    <<: *sim
+    command: [flamingmoes/recolectorvalve.json]
+  drain:
+    <<: *sim
+    command: [flamingmoes/drain.json]
+  conveyorbelt:
+    <<: *sim
+    command: [flamingmoes/conveyorbelt1.json]
+  flamingmoesprocess:
+    <<: *sim
+    command: [flamingmoes/flamingmoesprocess.json]
+networks:
+  ot:
+    driver: bridge
+    ipam:
+      # Simulators take dynamic addresses from .128-.191 only. Docker hands addresses out serially and wraps,
+      # so without the range a simulator eventually takes a static address (PLC .10, HMI .20, firewall .254).
+      config: [{ subnet: 10.213.30.0/24, ip_range: 10.213.30.128/26, gateway: 10.213.30.1 }]
+  simulators:
+    driver: bridge
+    internal: true

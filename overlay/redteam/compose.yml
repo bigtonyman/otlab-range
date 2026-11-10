@@ -1,0 +1,20 @@
+# Red team overlay: attacker workstation on the IT network, behind the enterprise firewall.
+# Merged after both the scenario compose and the enterprise overlay compose.
+# The scenario env supplies RT_IMAGE (pinned by digest after first build).
+services:
+  rt-box:
+    image: ${RT_IMAGE:-otlab/rt:1}
+    container_name: rt-box
+    hostname: attacker
+    restart: "no"
+    init: true
+    cap_add: [NET_RAW]
+    command: [tail, -f, /dev/null]
+    volumes:
+      - rt_loot:/root/loot
+      - rt_msf:/root/.msf4
+    networks:
+      it: { ipv4_address: 10.213.10.50 }
+volumes:
+  rt_loot:
+  rt_msf:

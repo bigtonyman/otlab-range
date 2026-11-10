@@ -1,0 +1,75 @@
+# Enterprise overlay: IT and DMZ zones and a default-deny firewall in front of a scenario's OT net.
+# Merged after the scenario's compose.yml (which defines the `ot` network). The scenario env supplies
+# ENT_OT_FW, ENT_JUMP_ALLOW, ENT_HIST_ALLOW, ENT_HIST_SOURCE, ENT_HIST_TAGS and ENT_SITE.
+# Zone routing (default routes via the firewall) is applied by ent_routes in lib.sh after `up`.
+x-ent: &ent
+  image: otlab/ent:1
+  restart: "no"
+  init: true
+services:
+  ent-fw:
+    <<: *ent
+    container_name: ent-fw
+    command: [/opt/ent/fw.sh]
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    environment:
+      JUMP_ALLOW: "${ENT_JUMP_ALLOW}"
+      HIST_ALLOW: "${ENT_HIST_ALLOW}"
+    networks:
+      it: { ipv4_address: 10.213.10.254 }
+      dmz: { ipv4_address: 10.213.20.254 }
+      ot: { ipv4_address: "${ENT_OT_FW}" }
+  ent-ws:
+    <<: *ent
+    container_name: ent-ws
+    hostname: it-ws
+    user: analyst
+    working_dir: /home/analyst
+    command: [tail, -f, /dev/null]
+    depends_on: [ent-fw]
+    networks:
+      it: { ipv4_address: 10.213.10.10 }
+  ent-web:
+    <<: *ent
+    container_name: ent-web
+    hostname: intranet
+    user: nobody
+    command: [python3, -m, http.server, "8080", -d, /opt/ent/www]
+    depends_on: [ent-fw]
+    networks:
+      it: { ipv4_address: 10.213.10.20 }
+  ent-jump:
+    <<: *ent
+    container_name: ent-jump
+    hostname: dmz-jump
+    command: [/opt/ent/jump.sh]
+    depends_on: [ent-fw]
+    networks:
+      dmz: { ipv4_address: 10.213.20.10 }
+  ent-hist:
+    <<: *ent
+    container_name: ent-hist
+    hostname: dmz-hist
+    user: nobody
+    command: [python3, -u, /opt/ent/hist.py]
+    ports: ["127.0.0.1:8081:8080"]
+    environment:
+      HIST_SOURCE: "${ENT_HIST_SOURCE}"
+      HIST_TAGS: "${ENT_HIST_TAGS}"
+      HIST_SITE: "${ENT_SITE}"
+      HIST_PROTO: "${ENT_HIST_PROTO:-modbus}"
+      HIST_OPCUA_PATH: "${ENT_HIST_OPCUA_PATH:-/tkfarm/}"
+    depends_on: [ent-fw]
+    networks:
+      dmz: { ipv4_address: 10.213.20.20 }
+networks:
+  it:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.213.10.0/24 }]
+  dmz:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.213.20.0/24 }]

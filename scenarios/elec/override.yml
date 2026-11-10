@@ -1,0 +1,61 @@
+# Derived from RangerDanger's docker-compose.offline.yml (https://github.com/tonylturner/rangerdanger,
+# tag v0.1.31, Apache-2.0, Copyright the RangerDanger authors). Changes: no auto-restart, no pull at start,
+# images pinned by digest (pins.yml), ports bound to loopback, otlab site services added.
+services:
+  firewall:
+    restart: "no"
+    pull_policy: never
+  capbank_sim:
+    restart: "no"
+    pull_policy: never
+  opendss_sim:
+    restart: "no"
+    pull_policy: never
+  recloser_sim:
+    restart: "no"
+    pull_policy: never
+  regulator_sim:
+    restart: "no"
+    pull_policy: never
+  relay_sim:
+    restart: "no"
+    pull_policy: never
+  rtac_sim:
+    restart: "no"
+    pull_policy: never
+  backend:
+    restart: "no"
+    pull_policy: never
+  frontend:
+    restart: "no"
+    pull_policy: never
+  historian_sim:
+    restart: "no"
+    pull_policy: never
+  proxy:
+    restart: "no"
+    pull_policy: never
+  vendor_jump:
+    restart: "no"
+    pull_policy: never
+  corp_ws:
+    restart: "no"
+    pull_policy: never
+  eng_workstation:
+    restart: "no"
+    pull_policy: never
+  kali:
+    restart: "no"
+    pull_policy: never
+  openplc:
+    restart: "no"
+    pull_policy: never
+  fuxa_hmi:
+    restart: "no"
+    pull_policy: never
+  gps_sim:
+    restart: "no"
+    pull_policy: never
+  hmi_poller:
+    restart: "no"
+    pull_policy: never

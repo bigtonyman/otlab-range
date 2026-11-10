@@ -1,0 +1,39 @@
+services:
+  backend:
+    image: ghcr.io/tonylturner/rangerdanger-backend@sha256:19499559eb2dda5e5f70f987b4350378226857eefaa58d717c849e666c350dff
+  capbank_sim:
+    image: ghcr.io/tonylturner/rangerdanger-capbank-sim@sha256:b4458649612a1e088616664c2d52b485cc1e20c75ce5cc7ef585df508923d6fa
+  corp_ws:
+    image: linuxserver/webtop@sha256:39afefa41a46fefe3ae910ccf5861933ead54e70d935f1695e70b0627f1b5666
+  eng_workstation:
+    image: ghcr.io/tonylturner/rangerdanger-eng-ws@sha256:bdede5c3a494f3cfdd7e849e90390fd57b00ef5d4e32e82e0ba23dd28e541fdb
+  firewall:
+    image: ghcr.io/tonylturner/containd@sha256:fa56316bf2807b9c643748a8ffec2786986feffc607f5b9e2cd2cc8184644cea
+  frontend:
+    image: ghcr.io/tonylturner/rangerdanger-frontend@sha256:e5dbb85b08c16c50aef9fec0563ed1df14945b884dfb14019bf1faa5317afef8
+  fuxa_hmi:
+    image: frangoteam/fuxa@sha256:025e693971f72de9fabf2c811296f9dca3854dc501cb309b02302c7b94717d0f
+  gps_sim:
+    image: ghcr.io/tonylturner/rangerdanger-gps-sim@sha256:fe6ea2e6a359f1b8f0021c69a9e80ce720b3c66825216d4d732d94ce811805da
+  historian_sim:
+    image: ghcr.io/tonylturner/rangerdanger-historian-sim@sha256:3ff8032e6106af287c7426b6950a0da5c094c6bcf60b1c19fdd1524ba43a8eee
+  hmi_poller:
+    image: alpine@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507
+  kali:
+    image: ghcr.io/tonylturner/rangerdanger-kali@sha256:3be0ee7dee421954dde822579ca84c13440c17e0031901bb708bb81cc9698999
+  opendss_sim:
+    image: ghcr.io/tonylturner/rangerdanger-opendss-sim@sha256:f51845dfd364a89eaf1c4dfee940ca2dc2bdbc374604666c1179621775619f8b
+  openplc:
+    image: ghcr.io/tonylturner/rangerdanger-openplc@sha256:77b6286796344d6e7a873df2b2d79db51513bb7ec2b496903ae5ed45f3d1b8c3
+  proxy:
+    image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+  recloser_sim:
+    image: ghcr.io/tonylturner/rangerdanger-recloser-sim@sha256:fec4697060cc2f71c9d953aa5eb6ce9caaad4ac31f67be56ae57f812cfc90441
+  regulator_sim:
+    image: ghcr.io/tonylturner/rangerdanger-regulator-sim@sha256:d7c3dfeafc2d275b2971340bf56c89c690c62519fdca3390e35b77cf2bc28331
+  relay_sim:
+    image: ghcr.io/tonylturner/rangerdanger-relay-sim@sha256:d2324ff42ffff4127c8bd12de509eeab5c1c42dde1fa1d724a3c58b9bd60c174
+  rtac_sim:
+    image: ghcr.io/tonylturner/rangerdanger-rtac-sim@sha256:e11de7997a4e6674e6f95d2e1f9909f2130bd3543017f93600dda84b61c1f074
+  vendor_jump:
+    image: ghcr.io/tonylturner/rangerdanger-vendor-jump@sha256:8d69ae8628ccef77a4e332edfe859171b05c48581cd85e48d9decfd0b5f14aaf

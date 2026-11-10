@@ -1,0 +1,8 @@
+Remote access to the control system (procedure OPS-014)
+
+1. Nothing on the business network talks to the control network directly.
+2. Process values: use the historian mirror, http://10.213.20.20:8080/
+3. HMI access: through the jump host only, with your workstation key.
+     ssh jump                      (10.213.20.10, user "jump")
+     ssh -L 1881:<hmi>:1881 jump   then browse http://localhost:1881
+4. Controller changes are made from the engineering station on the control network, never from here.

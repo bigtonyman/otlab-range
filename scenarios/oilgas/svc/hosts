@@ -1,0 +1,10 @@
+# tkfarm.lan: the terminal's OT zone, served by ot-svc01 (dnsmasq --addn-hosts, domain appended)
+10.213.40.5    ot-svc01
+10.213.40.10   plc01
+10.213.40.11   tk101-io
+10.213.40.12   pl201-io
+10.213.40.20   hmi01
+10.213.40.30   ows01
+10.213.40.40   opc01
+10.213.40.254  ot-fw
+192.168.0.10   click01

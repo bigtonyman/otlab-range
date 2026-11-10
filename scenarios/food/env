@@ -1,0 +1,22 @@
+UPSTREAM_REPO=https://github.com/Gradiant/virtual-factory
+UPSTREAM_COMMIT=4cb500d5a8881b784a2b8b5ad38181f33be45a54
+PROJECT=food
+# OpenPLC_v3 as of virtual-factory's last commit (2024-05-16); installs a python3 venv, no python2.7.
+OPENPLC_REPO=https://github.com/thiagoralves/OpenPLC_v3
+OPENPLC_COMMIT=b4702061dc14d1024856f71b4543298d77007b88
+FUXA_IMAGE=frangoteam/fuxa@sha256:025e693971f72de9fabf2c811296f9dca3854dc501cb309b02302c7b94717d0f
+# Enterprise overlay (overlay/enterprise): firewall OT address, conduits, historian tags.
+# The jump host also reaches the OpenPLC web UI (8080) as the engineering path.
+ENT_OT_FW=10.213.30.254
+ENT_PLC=10.213.30.10
+ENT_HMI=10.213.30.20:1881
+# OPC server (opc01) is an OT host behind the firewall; the DMZ historian subscribes to it.
+ENT_OT_HOSTS="fd-plc fd-hmi fd-opc"
+ENT_JUMP_ALLOW="10.213.30.20:1881 10.213.30.10:8080"
+# The historian subscribes to the OPC UA data server (opc01), not the controller: no Modbus crosses the DMZ.
+ENT_HIST_ALLOW="10.213.30.40:4840"
+ENT_HIST_SOURCE=10.213.30.40:4840
+ENT_HIST_PROTO=opcua
+ENT_HIST_OPCUA_PATH=/flamingmoes/
+ENT_HIST_TAGS="mixtank1_level_pct:ns=2;s=MixTank1.Level_pct,mixtank2_level_pct:ns=2;s=MixTank2.Level_pct,collector_level_pct:ns=2;s=Collector.Level_pct,mixtank1_temp_c:ns=2;s=MixTank1.Temp_C,mixtank1_valve:ns=2;s=MixTank1.Valve,conveyor:ns=2;s=Line.Conveyor,manual_mode:ns=2;s=Site.ManualMode"
+ENT_SITE="Flaming Moe's bottling plant"

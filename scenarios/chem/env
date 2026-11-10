@@ -1,0 +1,20 @@
+UPSTREAM_REPO=https://github.com/Fortiphyd/GRFICSv3
+UPSTREAM_COMMIT=754870da8798a7f4cbfbeeaffc6a8359d3549a05
+PROJECT=grfics
+CORE="router simulation plc hmi ews infra opc ows ent-fw ent-ws ent-web ent-jump ent-hist"
+ATTACK="kali caldera"
+# Enterprise overlay (overlay/enterprise) in front of GRFICS's own DMZ: IT and a second, separate DMZ (jump host,
+# historian mirror) behind ent-fw, which takes a leg on the plant DMZ (192.168.90.0/24) as its "OT" side. The plant
+# router (GRFICS's own firewall, process LAN 192.168.95.0/24) stays where it is, between that DMZ and the PLC.
+ENT_OT_FW=192.168.90.254
+ENT_PLC=192.168.95.2
+ENT_HMI=192.168.90.107:8080
+# The HMI and the OPC server (opc01) are plant-DMZ hosts behind ent-fw; the DMZ historian subscribes to opc01.
+ENT_OT_HOSTS="HMI chem-opc"
+ENT_JUMP_ALLOW="192.168.90.107:8080"
+ENT_HIST_ALLOW="192.168.90.40:4840"
+ENT_HIST_SOURCE=192.168.90.40:4840
+ENT_HIST_PROTO=opcua
+ENT_HIST_OPCUA_PATH=/chem/
+ENT_HIST_TAGS="reactor_pressure_kpa:ns=2;s=Reactor.Pressure_kPa,reactor_level_pct:ns=2;s=Reactor.Level_pct,feed1_valve_pct:ns=2;s=Feed1.ValvePos_pct,feed1_flow:ns=2;s=Feed1.Flow,product_flow:ns=2;s=Product.Flow,purge_comp_a_pct:ns=2;s=Purge.CompA_pct,run:ns=2;s=Site.Run"
+ENT_SITE="GRFICS chemical plant"

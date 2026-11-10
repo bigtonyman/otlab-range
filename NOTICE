@@ -1,0 +1,17 @@
+otlab
+Copyright 2026 the otlab authors
+
+otlab installs and configures the following third-party projects at install time. It does not include their
+source code. Each remains under its own licence.
+
+- GRFICSv3, Fortiphyd Logic (https://github.com/Fortiphyd/GRFICSv3), GPL-3.0. Used by the chem scenario via
+  its published container images, pinned by digest.
+- RangerDanger (https://github.com/tonylturner/rangerdanger), Apache-2.0. Used by the elec scenario.
+  scenarios/elec/override.yml is derived from its docker-compose.offline.yml; changes are noted in that file.
+- virtual-factory, Gradiant (https://github.com/Gradiant/virtual-factory), MPL-2.0. Used by the food scenario;
+  its simulators and HMI project are taken from a clone made inside the scenario VM at install time.
+- OTForge, Ian Burres (https://github.com/iburres/otforge), MIT. The oilgas scenario builds its process-sim
+  container from a clone made at install time, with a one-line patch applied by scenarios/oilgas/install.sh.
+- FUXA, frangoteam (https://github.com/frangoteam/FUXA), MIT. HMI runtime for oilgas, food and elec.
+- OpenPLC Runtime (https://github.com/thiagoralves/OpenPLC_v3), GPL-3.0. Built inside the food scenario VM.
+- Scada-LTS, Kali Linux, Caldera and other software arrive inside the upstream images above.

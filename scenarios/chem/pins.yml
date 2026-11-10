@@ -1,0 +1,15 @@
+services:
+  caldera:
+    image: fortiphyd/grfics-caldera@sha256:59855c3bc3b9c8a3a51fa1eb4ef0c00399115214256a801cfc11e503f0c22513
+  ews:
+    image: fortiphyd/grfics-workstation@sha256:df4805370cb0a7f4efb7551adf9f4dd9587ec5bc5cf00920463d97db5587362e
+  hmi:
+    image: fortiphyd/grfics-scadalts@sha256:fce4c48c35b7f0246e8c89c9020a64facd5d03d6e0df9948956e876c7b763d97
+  kali:
+    image: fortiphyd/grfics-attacker@sha256:f168c043b7be55a29e1942747af099b8063eee0ee50b608b381e7c14b917a129
+  plc:
+    image: fortiphyd/grfics-plc@sha256:364461af6d7b56563fa6fdc6a296a2dfa6530caf07ea736bbc9a71701a360919
+  router:
+    image: fortiphyd/grfics-router@sha256:251fcac3d8b15ed431ef5432401498f1ed846ba164d6ee1dfbd0e87c9019ddc1
+  simulation:
+    image: fortiphyd/grfics-simulation@sha256:c4504ddab41e7dc9b5b43df598a81d51129ca824bc5a0044af51545b91eca378

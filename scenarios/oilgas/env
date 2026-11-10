@@ -1,0 +1,20 @@
+UPSTREAM_REPO=https://github.com/iburres/otforge
+UPSTREAM_COMMIT=458fea79166475fabaec2835678995d0d5639a13
+PROJECT=oilgas
+FUXA_IMAGE=frangoteam/fuxa@sha256:025e693971f72de9fabf2c811296f9dca3854dc501cb309b02302c7b94717d0f
+# Enterprise overlay (overlay/enterprise): firewall OT address, conduits, historian tags.
+ENT_OT_FW=10.213.40.254
+ENT_PLC=10.213.40.10
+ENT_HMI=10.213.40.20:1881
+ENT_OT_HOSTS="og-plc og-hmi og-opc"
+ENT_JUMP_ALLOW="10.213.40.20:1881"
+# The historian subscribes to the OPC UA data server (opc01), not to the controller: no Modbus crosses the DMZ.
+ENT_HIST_ALLOW="10.213.40.40:4840"
+ENT_HIST_SOURCE=10.213.40.40:4840
+ENT_HIST_PROTO=opcua
+ENT_HIST_TAGS="tank_level_pct:ns=2;s=TK101.Level_pct,transfer_flow_lpm:ns=2;s=TK101.TransferFlow_lpm,pipeline_pressure_bar:ns=2;s=PL201.Pressure_bar,level_setpoint_pct:ns=2;s=LIC101.Setpoint_pct,interlock_word:ns=2;s=Site.InterlockWord,alarm_word:ns=2;s=Site.AlarmWord,transfer_pump_run:ns=2;s=P101.Run,transferred_today_l:ns=2;s=Site.TransferredToday_L"
+ENT_SITE="Tank transfer terminal"
+# Physical CLICK PLUS PLC on net2 (VLAN 90). REAL_PLC is wired into the HMI only when the VM's own
+# PLC address (PLC_SELF) is present, i.e. when `otlab plc <scenario> on` has attached net2.
+REAL_PLC=192.168.0.10
+PLC_SELF=192.168.0.250

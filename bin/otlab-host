@@ -1,0 +1,39 @@
+#!/bin/bash
+# Run from your workstation. Runs the otlab CLI on the Proxmox node over SSH; optionally powers the node on/off
+# (host.power in otlab.json).
+#   otlab-host on | off | power      host power (off refuses while any lab VM is running)
+#   otlab-host sync                  copy this repo to /opt/otlab on the node
+#   otlab-host capture <scenario> [--net ot] [--seconds 60] [--filter BPF]
+#                                    pcap of a docker bridge in a running scenario, pulled to ./captures/
+#   otlab-host <otlab args...>       e.g. otlab-host status, otlab-host start chem
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+[ -f "$HERE/otlab.json" ] || { echo "otlab.json not found: copy otlab.example.json to otlab.json and edit it" >&2; exit 1; }
+cfg() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))
+for k in sys.argv[2].split("."): d = d.get(k, "") if isinstance(d, dict) else ""
+print(d or "")' "$HERE/otlab.json" "$1"; }
+NODE=$(cfg host.ssh); [ -n "$NODE" ] || { echo "set host.ssh in otlab.json" >&2; exit 1; }
+PWR=$(cfg host.power.ssh)   # optional: where the power commands run (another always-on host, a BMC wrapper, ...)
+power() { local c; c=$(cfg host.power.$1)
+          [ -n "$PWR" ] && [ -n "$c" ] || { echo "host.power.$1 is not configured in otlab.json (node assumed always on)" >&2; return 3; }
+          ssh -o BatchMode=yes "$PWR" "$c" | tail -1; }
+case "${1:-}" in
+  on)    power on
+         until ssh -o ConnectTimeout=5 -o BatchMode=yes $NODE true 2>/dev/null; do sleep 8; done; echo "lab host is up" ;;
+  power) power status ;;
+  off)   if ssh -o BatchMode=yes $NODE 'qm list | awk "\$1>=9200 && \$1<=9299 && \$3==\"running\"" | grep -q .'; then
+           echo "REFUSING: a lab VM is still running; run: otlab-host stop --all" >&2; exit 2; fi
+         power off ;;
+  sync)  rsync -a --delete --exclude .git --exclude captures "$HERE/" $NODE:/opt/otlab/ && echo synced ;;
+  capture) shift; sc=${1:?usage: otlab-host capture <scenario> [--net ot] [--seconds 60] [--filter BPF]}
+         res=$(ssh -o BatchMode=yes $NODE otlab capture "$(printf '%q ' "$@")") || { echo "$res" >&2; exit 1; }
+         line=$(grep '^PCAP ' <<<"$res" | tail -1); [ -n "$line" ] || { echo "$res" >&2; exit 1; }
+         path=$(awk '{print $2}' <<<"$line"); sum=$(sed -n 's/.* sha256=\([0-9a-f]*\).*/\1/p' <<<"$line")
+         ip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["scenarios"][sys.argv[2]]["ip"])' "$HERE/otlab.json" "$sc")
+         mkdir -p "$HERE/captures"; dst="$HERE/captures/$(basename "$path")"
+         scp -q -o BatchMode=yes "otlab@$ip:$path" "$dst"
+         [ "$(shasum -a 256 "$dst" | cut -d' ' -f1)" = "$sum" ] || { echo "checksum mismatch on $dst" >&2; exit 1; }
+         echo "$line"; echo "saved $dst" ;;
+  "")    sed -n 2,9p "$0" ;;
+  *)     ssh -o BatchMode=yes $NODE otlab "$@" ;;
+esac

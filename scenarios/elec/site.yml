@@ -1,0 +1,49 @@
+# Site layer for elec (overlay/site), merged after upstream's compose, override.yml and pins.yml.
+# Everything lives in the OT-operations zone (ot_ops_net, 10.30.30.0/24): the containd policy allows that zone
+# to talk to itself and nothing else needs to change. Upstream's gps-sim only sends NTP client packets (it serves no
+# time), so infra is the site's NTP server, DNS and syslog collector; the RTAC's autonomous polling is upstream's.
+# otlab changes: FUXA gets its Modbus driver (otlab/el-hmi:1) and a real project over the RTAC's register map, so it
+# polls instead of the canned-frame hmi_poller, which is switched off. Site clock: Alaska time.
+x-site: &site
+  TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+  NTP_HOST: 10.30.30.60
+  SYSLOG_HOST: 10.30.30.60
+  OT_BROADCAST: 10.30.30.255
+services:
+  fuxa_hmi:
+    image: otlab/el-hmi:1
+  hmi_poller:
+    profiles: [upstream-canned-poller]
+  infra:
+    image: otlab/site:1
+    container_name: rangerdanger-infra
+    hostname: ot-svc01
+    restart: "no"
+    init: true
+    command: [/opt/site/infra.sh]
+    environment:
+      TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+      SITE_DOMAIN: substation.lan
+      SITE_HOSTS: /opt/site/hosts
+      SITE_NTP_ALLOW: "10.30.30.0/24"
+    volumes: ["/opt/otlab/scenario/svc/hosts:/opt/site/hosts:ro"]
+    networks:
+      ot_ops_net: { ipv4_address: 10.30.30.60 }
+  ows:
+    image: otlab/site:1
+    container_name: rangerdanger-ows
+    hostname: ows01
+    restart: "no"
+    init: true
+    working_dir: /opt/site
+    command: [python3, -u, ops.py]
+    environment:
+      <<: *site
+      RTAC_URL: http://10.30.30.20:8080
+      HMI_URL: http://10.30.30.10:1881
+    volumes:
+      - /opt/otlab/scenario/svc/ops.py:/opt/site/ops.py:ro
+      - /opt/otlab/scenario/svc/resolv.conf:/etc/resolv.conf:ro
+    depends_on: [fuxa_hmi, rtac_sim, infra]
+    networks:
+      ot_ops_net: { ipv4_address: 10.30.30.31 }

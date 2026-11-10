@@ -1,0 +1,67 @@
+# Site layer for chem (overlay/site + overlay/enterprise), merged after upstream's compose, override.yml, pins.yml
+# and the enterprise overlay. Site hosts sit in GRFICS's own DMZ (c-dmz-net, 192.168.90.0/24) beside Scada-LTS:
+# upstream's images are pinned and untouched, so these are sidecars. Clock: Alaska time.
+#   infra  192.168.90.60  DNS (chem.lan), NTP and syslog collector
+#   opc    192.168.90.40  OPC UA data server over the PLC's Modbus map (the DMZ historian subscribes to it)
+#   ows    192.168.90.31  scripted operator workstation (Scada-LTS web login, read-only)
+# ent-fw gets a leg on the plant DMZ as the overlay's OT side; IT and the overlay's own DMZ stay on bridges.
+x-site: &site
+  TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+  NTP_HOST: 192.168.90.60
+  SYSLOG_HOST: 192.168.90.60
+  OT_BROADCAST: 192.168.90.255
+services:
+  ent-fw:
+    networks: !override
+      it: { ipv4_address: 10.213.10.254 }
+      dmz: { ipv4_address: 10.213.20.254 }
+      c-dmz-net: { ipv4_address: 192.168.90.254 }
+  infra:
+    image: otlab/site:1
+    container_name: chem-infra
+    hostname: ot-svc01
+    restart: "no"
+    init: true
+    command: [/opt/site/infra.sh]
+    environment:
+      TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+      SITE_DOMAIN: chem.lan
+      SITE_HOSTS: /opt/site/hosts
+      SITE_NTP_ALLOW: "192.168.90.0/24 192.168.95.0/24"
+    volumes: ["/opt/otlab/scenario/svc/hosts:/opt/site/hosts:ro"]
+    networks:
+      c-dmz-net: { ipv4_address: 192.168.90.60 }
+  opc:
+    image: otlab/site:1
+    container_name: chem-opc
+    hostname: opc01
+    restart: "no"
+    init: true
+    working_dir: /opt/site
+    command: [python3, -u, opc.py]
+    environment:
+      <<: *site
+      PLC_HOST: 192.168.95.2
+    volumes:
+      - /opt/otlab/scenario/svc/opc.py:/opt/site/opc.py:ro
+      - /opt/otlab/scenario/svc/resolv.conf:/etc/resolv.conf:ro
+    depends_on: [plc, infra]
+    networks:
+      c-dmz-net: { ipv4_address: 192.168.90.40 }
+  ows:
+    image: otlab/site:1
+    container_name: chem-ows
+    hostname: ows01
+    restart: "no"
+    init: true
+    working_dir: /opt/site
+    command: [python3, -u, ops.py]
+    environment:
+      <<: *site
+      HMI_URL: http://192.168.90.107:8080
+    volumes:
+      - /opt/otlab/scenario/svc/ops.py:/opt/site/ops.py:ro
+      - /opt/otlab/scenario/svc/resolv.conf:/etc/resolv.conf:ro
+    depends_on: [hmi, infra]
+    networks:
+      c-dmz-net: { ipv4_address: 192.168.90.31 }

@@ -1,0 +1,11 @@
+# chem.lan: the chemical plant (GRFICS) DMZ and process LAN, served by ot-svc01 (dnsmasq --addn-hosts, domain appended)
+192.168.90.254  ot-fw
+192.168.90.200  rtr01
+192.168.90.107  hmi01
+192.168.90.60   ot-svc01
+192.168.90.40   opc01
+192.168.90.31   ows01
+192.168.95.200  rtr01-ics
+192.168.95.2    plc01
+192.168.95.5    ews01
+192.168.95.45   sim01

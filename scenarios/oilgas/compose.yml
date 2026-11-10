@@ -1,0 +1,118 @@
+# Oil and gas tank-transfer scenario (otlab custom).
+# Physical-process simulation: two instances of OTForge process-sim (MIT), lumped first-order models.
+# Control: a small Python controller (plc/) acting as Modbus master to the sims and Modbus server to the HMI.
+# Protocol on the wire is real Modbus/TCP. This is NOT refinery or pipeline-hydraulics fidelity.
+# Site services (svc/): OT infrastructure host (DNS tkfarm.lan, NTP, syslog), OPC UA data server, operator workstation.
+# Hostnames and addresses follow svc/hosts. Site clock: Alaska time.
+x-site: &site
+  TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+  NTP_HOST: 10.213.40.5
+  SYSLOG_HOST: 10.213.40.5
+services:
+  tank:
+    image: otlab/process-sim:${UPSTREAM_COMMIT}-otlab1
+    build: /opt/upstream/containers/process-sim
+    container_name: og-tank
+    restart: "no"
+    environment:
+      DEVICE_ID: TK-101
+      PROCESS_TYPE: water-tank
+      TANK_VOLUME_L: "20000"
+      TANK_AREA_M2: "4.0"
+      PUMP_FLOW_MAX_LPM: "600"
+      VALVE_FLOW_MAX_LPM: "800"
+      INITIAL_LEVEL_PCT: "50"
+      SIM_SEED: "101"
+    networks:
+      ot: { ipv4_address: 10.213.40.11 }
+  pipeline:
+    image: otlab/process-sim:${UPSTREAM_COMMIT}-otlab1
+    container_name: og-pipeline
+    restart: "no"
+    environment:
+      DEVICE_ID: PL-201
+      PROCESS_TYPE: pipeline
+      PIPELINE_VOLUME_L: "500"
+      PIPELINE_PUMP_MAX_LPM: "600"
+      # ~3 bar at 300 L/min with the outlet open; a closed outlet climbs past the 7.5 bar trip.
+      PIPELINE_CV_BASE: "3.04e-6"
+      SIM_SEED: "201"
+    networks:
+      ot: { ipv4_address: 10.213.40.12 }
+  plc:
+    image: otlab/og-controller:1
+    build: ./plc
+    container_name: og-plc
+    restart: "no"
+    hostname: plc01
+    environment:
+      <<: *site
+      TANK_HOST: 10.213.40.11
+      PIPE_HOST: 10.213.40.12
+      TANK_MAX_LEVEL_M: "5.0"
+    depends_on: [tank, pipeline, infra]
+    networks:
+      ot: { ipv4_address: 10.213.40.10 }
+  hmi:
+    image: otlab/og-hmi:1
+    container_name: og-hmi
+    hostname: hmi01
+    restart: "no"
+    environment:
+      TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+    ports: ["127.0.0.1:1881:1881"]
+    volumes:
+      - hmi_appdata:/usr/src/app/FUXA/server/_appdata
+      - hmi_db:/usr/src/app/FUXA/server/_db
+    depends_on: [plc]
+    networks:
+      ot: { ipv4_address: 10.213.40.20 }
+  infra:
+    image: otlab/og-svc:1
+    container_name: og-infra
+    hostname: ot-svc01
+    restart: "no"
+    init: true
+    command: [/opt/svc/infra.sh]
+    environment:
+      TZ: "AKST9AKDT,M3.2.0,M11.1.0"
+    networks:
+      ot: { ipv4_address: 10.213.40.5 }
+  opc:
+    image: otlab/og-svc:1
+    container_name: og-opc
+    hostname: opc01
+    restart: "no"
+    init: true
+    working_dir: /opt/svc
+    command: [python3, -u, opc.py]
+    environment:
+      <<: *site
+      PLC_HOST: 10.213.40.10
+    volumes: ["./svc/resolv.conf:/etc/resolv.conf:ro"]
+    depends_on: [plc, infra]
+    networks:
+      ot: { ipv4_address: 10.213.40.40 }
+  ops:
+    image: otlab/og-svc:1
+    container_name: og-ops
+    hostname: ows01
+    restart: "no"
+    init: true
+    working_dir: /opt/svc
+    command: [python3, -u, ops.py]
+    environment:
+      <<: *site
+      HMI_URL: http://10.213.40.20:1881
+    volumes: ["./svc/resolv.conf:/etc/resolv.conf:ro"]
+    depends_on: [hmi, infra]
+    networks:
+      ot: { ipv4_address: 10.213.40.30 }
+networks:
+  ot:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.213.40.0/24 }]
+volumes:
+  hmi_appdata:
+  hmi_db:

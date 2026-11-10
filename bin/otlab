@@ -1,0 +1,771 @@
+#!/usr/bin/env python3
+"""otlab: on-demand OT lab scenarios on a Proxmox node.
+
+Runs on the Proxmox node as root. Touches only resources recorded in the manifest.
+Never: starts everything, deletes by wildcard, prunes Docker, powers the host off,
+or places a disk on a forbidden storage.
+"""
+import argparse, base64, datetime, hashlib, json, os, re, shlex, subprocess, sys, time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+_CFG_PATH = os.path.join(ROOT, "otlab.json")
+if not os.path.exists(_CFG_PATH):
+    sys.exit("otlab.json not found: copy otlab.example.json to otlab.json and edit it for your site")
+CFG = json.load(open(_CFG_PATH))
+STATE_DIR = "/var/lib/otlab"
+MANIFEST = os.path.join(STATE_DIR, "manifest.json")
+FW_DIR = "/etc/pve/firewall"
+MARK = "otlab-managed"
+# Match guest NICs by PCI path (net0 -> slot 0x12, net1 -> slot 0x13, net2 -> 0x14); names differ between image and clones.
+MGMT_PATH, WAN_PATH, PLC_PATH = "pci-0000:00:12.0", "pci-0000:00:13.0", "pci-0000:00:14.0"
+PLC_NETWORK = "/etc/systemd/network/30-plc.network"
+GUARD = """#!/bin/sh
+# otlab: containers must never leave through the management NIC, and only the OT segment
+# (10.213.10/20 are IT/DMZ) may reach the physical PLC VLAN through net2. Idempotent; runs at boot.
+IF=$(ls /sys/bus/pci/devices/0000:00:12.0/virtio*/net/ 2>/dev/null | head -1)
+[ -n "$IF" ] || exit 1
+iptables -C DOCKER-USER -o "$IF" -j DROP 2>/dev/null || iptables -I DOCKER-USER -o "$IF" -j DROP
+PLC=$(ls /sys/bus/pci/devices/0000:00:14.0/virtio*/net/ 2>/dev/null | head -1)
+if [ -n "$PLC" ]; then
+  for net in 10.213.10.0/24 10.213.20.0/24; do
+    iptables -C DOCKER-USER -o "$PLC" -s "$net" -j DROP 2>/dev/null || iptables -I DOCKER-USER -o "$PLC" -s "$net" -j DROP
+  done
+fi
+"""
+GUARD_UNIT = """[Unit]
+Description=otlab: block container traffic toward the management NIC
+After=docker.service
+Requires=docker.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/otlab-guard
+[Install]
+WantedBy=multi-user.target
+"""
+RFC1918 = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10"]
+
+
+def die(msg):
+    print(f"otlab: REFUSING: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def run(cmd, check=True, inp=None, quiet=False):
+    r = subprocess.run(cmd, input=inp, capture_output=True)
+    if check and r.returncode != 0:
+        die(f"{' '.join(cmd)} failed rc={r.returncode}: {r.stderr.decode(errors='replace').strip()}")
+    if not quiet and r.stderr.strip() and r.returncode != 0:
+        print(r.stderr.decode(errors="replace"), file=sys.stderr)
+    return r
+
+
+def out(cmd, **kw):
+    return run(cmd, **kw).stdout.decode(errors="replace")
+
+
+# ---------- manifest ----------
+
+def load_manifest():
+    if not os.path.exists(MANIFEST):
+        return {"version": 1, "node": CFG["node"], "resources": {}}
+    return json.load(open(MANIFEST))
+
+
+def save_manifest(m):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    m["updated"] = datetime.datetime.now().isoformat(timespec="seconds")
+    tmp = MANIFEST + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(m, f, indent=2, sort_keys=True)
+    os.replace(tmp, MANIFEST)
+
+
+# ---------- proxmox helpers ----------
+
+def assert_node():
+    host = os.uname().nodename.split(".")[0]
+    if host != CFG["node"]:
+        die(f"this is {host}, the lab belongs on {CFG['node']}")
+    if CFG["storage"] in CFG["forbidden_storage"]:
+        die(f"storage {CFG['storage']} is forbidden")
+
+
+def cluster_vms():
+    data = json.loads(out(["pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json"]))
+    return {int(r["vmid"]): r for r in data}
+
+
+def vm_config(vmid):
+    r = run(["qm", "config", str(vmid)], check=False, quiet=True)
+    if r.returncode != 0:
+        return None
+    cfg = {}
+    for line in r.stdout.decode().splitlines():
+        if ": " in line:
+            k, v = line.split(": ", 1)
+            cfg[k] = v
+    return cfg
+
+
+def vm_uuid(cfg):
+    for part in cfg.get("smbios1", "").split(","):
+        if part.startswith("uuid="):
+            return part[5:]
+    return None
+
+
+def vm_status(vmid):
+    return out(["qm", "status", str(vmid)]).split()[-1]
+
+
+def spec(name):
+    if name == "base":
+        return dict(CFG["template"], key="base")
+    if name not in CFG["scenarios"]:
+        die(f"unknown scenario '{name}' (choose: {', '.join(CFG['scenarios'])})")
+    return dict(CFG["scenarios"][name], key=name)
+
+
+def owned(name, m=None, must=True):
+    """Return (spec, manifest entry) only when VMID, node, UUID and marker all match."""
+    m = m or load_manifest()
+    s = spec(name)
+    ent = m["resources"].get(name)
+    vms = cluster_vms()
+    live = vms.get(s["vmid"])
+    if not ent:
+        if live and must:
+            die(f"VMID {s['vmid']} exists ({live.get('name')} on {live.get('node')}) but is not in the manifest; will not adopt it")
+        if must:
+            die(f"{name} is not deployed (not in manifest)")
+        return s, None
+    if not live:
+        if must:
+            die(f"{name} is in the manifest but VMID {s['vmid']} no longer exists; fix the manifest by hand")
+        return s, ent
+    if live.get("node") != CFG["node"]:
+        die(f"VMID {s['vmid']} lives on {live.get('node')}, not {CFG['node']}")
+    cfg = vm_config(s["vmid"])
+    if vm_uuid(cfg) != ent["uuid"] or MARK not in cfg.get("description", ""):
+        die(f"VMID {s['vmid']} does not match the manifest (uuid/marker); will not touch it")
+    return s, ent
+
+
+def fw_text(s, plc=False):
+    """plc=True adds net2: the physical PLC on its L2-only VLAN, any protocol, source pinned to the VM's PLC address."""
+    allow = ",".join(CFG["mgmt"]["allow_ssh_from"])
+    lines = [
+        f"# {MARK} scenario={s['key']}",
+        "[OPTIONS]", "",
+        "enable: 1", "policy_in: DROP", "policy_out: DROP",
+        "macfilter: 1", "dhcp: 1", "ndp: 0", "radv: 0",
+        "log_level_in: nolog", "log_level_out: nolog", "",
+        "[IPSET ipfilter-net0]", "", s["ip"], "",
+        "[RULES]", "",
+        f"IN ACCEPT -i net0 -source {allow} -p tcp -dport 22 # management SSH",
+    ]
+    for net in RFC1918:
+        lines.append(f"OUT DROP -i net1 -dest {net} # no private/LAN destinations from the internet NIC")
+    lines += [
+        "OUT ACCEPT -i net1 -p udp -dport 53 # DNS (public resolvers only, private ranges dropped above)",
+        "OUT ACCEPT -i net1 -p tcp -dport 53",
+        "OUT ACCEPT -i net1 -p tcp -dport 80",
+        "OUT ACCEPT -i net1 -p tcp -dport 443",
+        "OUT ACCEPT -i net1 -p udp -dport 123 # NTP",
+        "",
+    ]
+    if plc:
+        net = CFG["plc"]["subnet"]
+        lines[lines.index("[RULES]"):lines.index("[RULES]")] = ["[IPSET ipfilter-net2]", "", s["plc_ip"].split("/")[0], ""]
+        lines[-1:-1] = [f"IN ACCEPT -i net2 -source {net} # physical PLC VLAN {CFG['plc']['tag']}",
+                        f"OUT ACCEPT -i net2 -dest {net} # physical PLC VLAN {CFG['plc']['tag']}"]
+    return "\n".join(lines)
+
+
+def write_fw(s, ent, plc=False):
+    path = f"{FW_DIR}/{s['vmid']}.fw"
+    text = fw_text(s, plc)
+    if os.path.exists(path):
+        cur = open(path).read()
+        if MARK not in cur.splitlines()[0]:
+            die(f"{path} exists and is not ours")
+    with open(path, "w") as f:
+        f.write(text)
+    ent["fw_file"] = path
+    ent["fw_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+
+
+def net_args(s, cfg, wan_up):
+    def mac(key):
+        v = (cfg or {}).get(key, "")
+        return v.split(",")[0].split("=")[1] if "=" in v.split(",")[0] else None
+    m0, m1 = mac("net0"), mac("net1")
+    n0 = f"virtio{'=' + m0 if m0 else ''},bridge={CFG['bridge']},tag={CFG['mgmt']['tag']},firewall=1"
+    n1 = f"virtio{'=' + m1 if m1 else ''},bridge={CFG['bridge']},tag={CFG['wan']['tag']},firewall=1,link_down={0 if wan_up else 1}"
+    return n0, n1
+
+
+def wan_state(cfg):
+    n1 = cfg.get("net1")
+    if not n1:
+        return "absent"
+    return "DOWN" if "link_down=1" in n1 else "UP"
+
+
+def plc_state(cfg):
+    return "ATTACHED" if f"tag={CFG['plc']['tag']}" in cfg.get("net2", "") else "absent"
+
+
+def set_wan(s, up):
+    cfg = vm_config(s["vmid"])
+    _, n1 = net_args(s, cfg, up)
+    run(["qm", "set", str(s["vmid"]), "--net1", n1])
+    cfg = vm_config(s["vmid"])
+    want = "UP" if up else "DOWN"
+    if wan_state(cfg) != want:
+        die(f"net1 on {s['vmid']} is {wan_state(cfg)}, wanted {want}")
+
+
+# ---------- guest agent ----------
+
+def gexec(vmid, script, timeout=120, inp=None, check=True):
+    """Run a bash script in the guest through the QEMU guest agent."""
+    cmd = ["qm", "guest", "exec", str(vmid), "--timeout", str(min(timeout, 300))]
+    if inp is not None:
+        cmd += ["--pass-stdin", "1"]
+    cmd += ["--", "/bin/bash", "-c", script]
+    st = json.loads(out(cmd, inp=inp))
+    end = time.time() + timeout
+    while not st.get("exited"):
+        if time.time() > end:
+            die(f"guest command timed out after {timeout}s: {script[:120]}")
+        time.sleep(3)
+        st = json.loads(out(["qm", "guest", "exec-status", str(vmid), str(st["pid"])])) | {"pid": st["pid"]}
+    o, e = st.get("out-data", ""), st.get("err-data", "")
+    if check and st.get("exitcode", 1) != 0:
+        die(f"guest command failed rc={st.get('exitcode')}: {script[:120]}\n{o}\n{e}")
+    return st.get("exitcode", 1), o, e
+
+
+def gexec_long(vmid, script, log, timeout):
+    """Run a long script detached in the guest; poll its rc file. Survives agent call limits."""
+    rcf = log + ".rc"
+    gexec(vmid, f"rm -f {rcf}; nohup bash -c '( {script} ) > {log} 2>&1; echo $? > {rcf}' >/dev/null 2>&1 &")
+    end = time.time() + timeout
+    while time.time() < end:
+        rc, o, _ = gexec(vmid, f"cat {rcf} 2>/dev/null", check=False)
+        if o.strip():
+            return int(o.strip())
+        time.sleep(10)
+    die(f"guest job timed out after {timeout}s; see {log} in the guest")
+
+
+def wait_agent(vmid, timeout=240):
+    end = time.time() + timeout
+    while time.time() < end:
+        if run(["qm", "agent", str(vmid), "ping"], check=False, quiet=True).returncode == 0:
+            return
+        time.sleep(3)
+    die(f"guest agent on {vmid} did not answer within {timeout}s")
+
+
+def push_file(vmid, path, content, mode="0644"):
+    b = base64.b64encode(content.encode()).decode()
+    gexec(vmid, f"install -D -m {mode} /dev/null '{path}' && echo '{b}' | base64 -d > '{path}'")
+
+
+def push_bundle(vmid, name):
+    src = os.path.join(ROOT, "scenarios", name)
+    tar = run(["tar", "czf", "-", "-C", src, "."]).stdout
+    if len(tar) > 900_000:
+        die(f"scenario bundle {name} is {len(tar)} bytes; guest-agent stdin limit is 1 MiB")
+    # Extract over the existing directory: pins.yml and images.lock generated at install must survive.
+    gexec(vmid, "mkdir -p /opt/otlab/scenario && tar xzf - -C /opt/otlab/scenario", inp=tar)
+    common = run(["tar", "czf", "-", "-C", os.path.join(ROOT, "overlay"), "."]).stdout
+    gexec(vmid, "rm -rf /opt/otlab/overlay && mkdir -p /opt/otlab/overlay && tar xzf - -C /opt/otlab/overlay", inp=common)
+
+
+def guest_network(s):
+    routes = "".join(f"\n[Route]\nDestination={ip}/32\nGateway={CFG['mgmt']['gateway']}\n" for ip in CFG["mgmt"]["allow_ssh_from"])
+    mgmt = (f"[Match]\nPath={MGMT_PATH}\n\n[Network]\nAddress={s['ip']}/{CFG['mgmt']['prefix']}\n"
+            f"LinkLocalAddressing=no\nIPv6AcceptRA=no\n{routes}")
+    wan = (f"[Match]\nPath={WAN_PATH}\n\n[Network]\nDHCP=ipv4\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n"
+           f"DNS={' '.join(CFG['wan']['dns'])}\n\n[DHCPv4]\nUseDNS=no\nUseNTP=no\n\n[Link]\nRequiredForOnline=no\n")
+    return mgmt, wan
+
+
+def in_backup_window():
+    now = datetime.datetime.now().strftime("%H:%M")
+    return CFG["backup_window"]["start"] <= now <= CFG["backup_window"]["end"]
+
+
+def confirm(name, args, what):
+    if getattr(args, "confirm", None) != name:
+        print(f"\nDRY RUN: nothing changed. To {what}, re-run with: --confirm {name}")
+        sys.exit(0)
+
+
+# ---------- commands ----------
+
+def cmd_plan(args):
+    assert_node()
+    m = load_manifest()
+    names = [args.scenario] if args.scenario else ["base"] + list(CFG["scenarios"])
+    vms = cluster_vms()
+    for n in names:
+        s = spec(n)
+        ent = m["resources"].get(n)
+        live = vms.get(s["vmid"])
+        if ent and live:
+            state = "deployed (owned)"
+        elif live:
+            state = f"CONFLICT: VMID in use by {live.get('name')} on {live.get('node')}; deploy will refuse"
+        else:
+            state = "would create"
+        extra = "" if n == "base" else f" {s['cores']} vCPU, {s['memory_mb']} MB, {s['disk_gb']} G"
+        print(f"{n:7} vmid {s['vmid']} {s['name']:13} ip {s['ip']:15}{extra} on {CFG['storage']}: {state}")
+    print(f"\nPer VM: net0 {CFG['bridge']} tag {CFG['mgmt']['tag']} (SSH in from allow-list only, no outbound); "
+          f"net1 {CFG['bridge']} tag {CFG['wan']['tag']} (internet toggle, link down by default); onboot 0.")
+    print("Firewall file that deploy writes for each VM:\n")
+    print(fw_text(spec(names[-1])))
+
+
+def cmd_status(args):
+    assert_node()
+    m = load_manifest()
+    names = [args.scenario] if args.scenario else ["base"] + list(CFG["scenarios"])
+    vms = cluster_vms()
+    bad = False
+    for n in names:
+        s = spec(n)
+        ent = m["resources"].get(n)
+        live = vms.get(s["vmid"])
+        if not ent:
+            print(f"{n:7} vmid {s['vmid']}: not deployed" + (f" (VMID taken by foreign guest {live.get('name')})" if live else ""))
+            continue
+        if not live:
+            print(f"{n:7} vmid {s['vmid']}: in manifest but MISSING")
+            bad = True
+            continue
+        cfg = vm_config(s["vmid"])
+        ok = vm_uuid(cfg) == ent["uuid"]
+        onboot = cfg.get("onboot", "0")
+        snaps = [l.split()[1] for l in out(["qm", "listsnapshot", str(s["vmid"])]).splitlines() if "current" not in l and l.strip()]
+        st = "template" if cfg.get("template") == "1" else live.get("status")
+        print(f"{n:7} vmid {s['vmid']}: {st:8} owned={'yes' if ok else 'NO'} onboot={onboot} internet={wan_state(cfg)} "
+              f"snapshots={','.join(snaps) or '-'} phase={ent.get('phase', '-')}")
+        if onboot != "0" or not ok:
+            bad = True
+        if live.get("status") == "running" and args.scenario and st != "template":
+            rc, o, _ = gexec(s["vmid"], "docker ps --format '{{.Names}}\t{{.Status}}' | sort", check=False)
+            print(o.rstrip())
+    if in_backup_window():
+        print("NOTE: inside the nightly backup window; the host may be powered off when backups finish.")
+    sys.exit(1 if bad else 0)
+
+
+def create_vm(name, m, template_source=None):
+    """Create the base VM from a cloud image, or a scenario VM as a linked clone of the template."""
+    s = spec(name)
+    vms = cluster_vms()
+    if s["vmid"] in vms:
+        die(f"VMID {s['vmid']} already exists ({vms[s['vmid']].get('name')}); will not adopt or overwrite")
+    vid = str(s["vmid"])
+    if name == "base":
+        img = template_source
+        if not os.path.exists(img):
+            die(f"cloud image {img} not found")
+        run(["qm", "create", vid, "--name", s["name"], "--memory", "4096", "--cores", "4", "--cpu", "host",
+             "--ostype", "l26", "--scsihw", "virtio-scsi-single", "--agent", "enabled=1", "--onboot", "0",
+             "--serial0", "socket", "--vga", "std", "--tags", "otlab", "--description", f"{MARK} role=base"])
+        run(["qm", "set", vid, "--scsi0", f"{CFG['storage']}:0,import-from={img},discard=on,ssd=0"])
+        run(["qm", "set", vid, "--ide2", f"{CFG['storage']}:cloudinit", "--boot", "order=scsi0"])
+        run(["qm", "resize", vid, "scsi0", f"{s['disk_gb']}G"])
+        key = os.path.join(ROOT, "base", "authorized_keys")
+        run(["qm", "set", vid, "--ciuser", "otlab", "--sshkeys", key,
+             "--ipconfig0", f"ip={s['ip']}/{CFG['mgmt']['prefix']},gw={CFG['mgmt']['gateway']}", "--ipconfig1", "ip=dhcp"])
+    else:
+        base, bent = owned("base", m)
+        if vm_config(base["vmid"]).get("template") != "1":
+            die("base VM is not a template yet; finish `otlab deploy base` first")
+        run(["qm", "clone", str(base["vmid"]), vid, "--name", s["name"], "--full", "0"])
+        run(["qm", "set", vid, "--cores", str(s["cores"]), "--memory", str(s["memory_mb"]), "--onboot", "0",
+             "--tags", "otlab", "--description", f"{MARK} scenario={name}"])
+        run(["qm", "resize", vid, "scsi0", f"{s['disk_gb']}G"])
+    cfg = vm_config(s["vmid"])
+    ent = {"vmid": s["vmid"], "name": s["name"], "uuid": vm_uuid(cfg), "ip": s["ip"], "snapshots": [],
+           "created": datetime.datetime.now().isoformat(timespec="seconds"), "phase": "created"}
+    n0, n1 = net_args(s, cfg, False)
+    write_fw(s, ent)
+    run(["qm", "set", vid, "--net0", n0, "--net1", n1])
+    cfg = vm_config(s["vmid"])
+    ent["disks"] = sorted(v.split(",")[0] for k, v in cfg.items() if k.startswith(("scsi", "ide", "efidisk")) and ":" in v and "cloudinit" not in v)
+    ent["cloudinit"] = [v.split(",")[0] for k, v in cfg.items() if "cloudinit" in v]
+    for d in ent["disks"] + ent["cloudinit"]:
+        if d.split(":")[0] in CFG["forbidden_storage"]:
+            die(f"disk {d} landed on a forbidden storage")
+    m["resources"][name] = ent
+    save_manifest(m)
+    return s, ent
+
+
+def cmd_deploy(args):
+    assert_node()
+    m = load_manifest()
+    name = args.scenario
+    s = spec(name)
+    ent = m["resources"].get(name)
+    if ent and ent.get("phase") == "ready" and not args.reinstall:
+        owned(name, m)
+        print(f"{name} already deployed and ready (idempotent no-op). Use reset to restore the baseline.")
+        return
+    if name == "base":
+        if not ent:
+            if not args.image:
+                die("deploy base needs --image /path/to/debian-cloud.qcow2")
+            s, ent = create_vm("base", m, args.image)
+        print(f"base VM {s['vmid']} created. Start it, provision it with base/bootstrap.sh from your workstation, "
+              f"then run: otlab seal-base")
+        return
+    if in_backup_window() and not args.force:
+        die("inside the nightly backup window; the host may be powered off when backups finish. Retry later or use --force")
+    if not ent:
+        s, ent = create_vm(name, m)
+    else:
+        owned(name, m)
+    vid = s["vmid"]
+    if vm_status(vid) != "running":
+        set_wan(s, False)
+        run(["qm", "start", str(vid)])
+    wait_agent(vid)
+    mgmt, wan = guest_network(s)
+    push_file(vid, "/etc/systemd/network/10-mgmt.network", mgmt)
+    push_file(vid, "/etc/systemd/network/20-wan.network", wan)
+    push_file(vid, "/usr/local/sbin/otlab-guard", GUARD, "0755")
+    push_file(vid, "/etc/systemd/system/otlab-guard.service", GUARD_UNIT)
+    gexec(vid, "systemctl daemon-reload && systemctl enable -q otlab-guard && systemctl restart otlab-guard && iptables -S DOCKER-USER | grep -q DROP")
+    gexec(vid, f"hostnamectl set-hostname {s['name']}; networkctl reload; sleep 3; growpart /dev/sda 1 2>/dev/null; resize2fs /dev/sda1 2>/dev/null; df -h / | tail -1")
+    push_bundle(vid, name)
+    ent["phase"] = "installing"
+    save_manifest(m)
+    print(f"{name}: internet ON for install")
+    set_wan(s, True)
+    try:
+        gexec(vid, "for i in $(seq 1 30); do curl -fsS -m 5 -o /dev/null https://deb.debian.org && exit 0; sleep 2; done; exit 1", timeout=120)
+        irc = gexec_long(vid, "cd /opt/otlab/scenario && bash ./install.sh", "/var/log/otlab-install.log", 5400)
+    finally:
+        set_wan(s, False)
+        print(f"{name}: internet OFF (verified link_down=1)")
+    rc, o, _ = gexec(vid, "tail -5 /var/log/otlab-install.log", check=False)
+    if irc != 0:
+        ent["phase"] = "install-failed"
+        save_manifest(m)
+        die(f"install failed in guest:\n{o}")
+    rc, lock, _ = gexec(vid, "cat /opt/otlab/scenario/images.lock 2>/dev/null", check=False)
+    ent["images"] = lock.splitlines()
+    ent["phase"] = "installed"
+    save_manifest(m)
+    print(f"{name}: installed. Next: otlab test {name}, then otlab baseline {name}.")
+
+
+def cmd_seal_base(args):
+    assert_node()
+    m = load_manifest()
+    s, ent = owned("base", m)
+    if vm_config(s["vmid"]).get("template") == "1":
+        print("base is already a template")
+        return
+    if vm_status(s["vmid"]) != "stopped":
+        die("base VM must be stopped before sealing")
+    set_wan(s, False)
+    run(["qm", "template", str(s["vmid"])])
+    cfg = vm_config(s["vmid"])
+    ent["disks"] = sorted(v.split(",")[0] for k, v in cfg.items() if k.startswith("scsi") and ":" in v and "cloudinit" not in v)
+    ent["phase"] = "ready"
+    save_manifest(m)
+    print("base sealed as template")
+
+
+def cmd_start(args):
+    assert_node()
+    m = load_manifest()
+    s, ent = owned(args.scenario, m)
+    if args.scenario == "base":
+        die("the base template is never started by this command")
+    if in_backup_window() and not args.force:
+        die("inside the nightly backup window; the host may be powered off when backups finish. Use --force to start anyway")
+    running = [n for n in CFG["scenarios"] if n != args.scenario and n in m["resources"] and vm_status(spec(n)["vmid"]) == "running"]
+    if running and not args.allow_multiple:
+        die(f"{', '.join(running)} already running; stop it first or pass --allow-multiple")
+    vid = s["vmid"]
+    if vm_status(vid) != "running":
+        set_wan(s, False)
+        run(["qm", "start", str(vid)])
+    wait_agent(vid)
+    # Refresh the in-VM scenario/overlay bundle so a `sync` takes effect on start (install-generated
+    # files such as images.lock survive the extract). Without this, start runs the deploy-time copy.
+    push_bundle(vid, args.scenario)
+    # Reattach the physical PLC before bringing the scenario up, so the HMI generated in up.sh sees net2
+    # and the OT-only guard is in place. A reset/reboot drops net2; this restores it when plc_ip is set.
+    if s.get("plc_ip") and not args.no_plc:
+        try:
+            plc_attach(vid, s, ent, m)
+            print(f"{args.scenario}: physical PLC attached ({s['plc_ip']})")
+        except SystemExit:
+            print(f"{args.scenario}: WARNING could not attach the physical PLC; starting without it", file=sys.stderr)
+    gexec(vid, f"cd /opt/otlab/scenario && bash ./up.sh {args.profile or ''}", timeout=900)
+    print(f"{args.scenario} started. Internet: {wan_state(vm_config(vid))}. Management: ssh otlab@{s['ip']}")
+
+
+def cmd_stop(args):
+    assert_node()
+    m = load_manifest()
+    names = [n for n in CFG["scenarios"] if n in m["resources"]] if args.all else [args.scenario]
+    if not names or names == [None]:
+        die("name a scenario or pass --all")
+    for n in names:
+        s, ent = owned(n, m)
+        vid = s["vmid"]
+        if vm_status(vid) == "running":
+            set_wan(s, False)
+            if run(["qm", "agent", str(vid), "ping"], check=False, quiet=True).returncode == 0:
+                gexec(vid, "cd /opt/otlab/scenario && bash ./down.sh", timeout=300, check=False)
+            run(["qm", "shutdown", str(vid), "--timeout", "180", "--forceStop", "1"])
+        else:
+            set_wan(s, False)
+        st = vm_status(vid)
+        print(f"{n}: {st}, internet {wan_state(vm_config(vid))}")
+        if st != "stopped":
+            die(f"{n} did not stop")
+
+
+def cmd_net(args):
+    assert_node()
+    m = load_manifest()
+    s, ent = owned(args.scenario, m)
+    if args.state == "status":
+        print(f"{args.scenario}: internet {wan_state(vm_config(s['vmid']))}")
+        return
+    set_wan(s, args.state == "on")
+    print(f"{args.scenario}: internet {wan_state(vm_config(s['vmid']))}"
+          + (" (public DNS/HTTP/HTTPS/NTP only; private ranges dropped). Turn it off when done." if args.state == "on" else ""))
+
+
+def cmd_test(args):
+    assert_node()
+    m = load_manifest()
+    s, ent = owned(args.scenario, m)
+    vid = s["vmid"]
+    if vm_status(vid) != "running":
+        die("start the scenario first")
+    push_bundle(vid, args.scenario)
+    probes = json.dumps({"lan": CFG["mgmt"].get("isolation_probes") or [CFG["mgmt"]["gateway"]],
+                         "peers": [v["ip"] for k, v in CFG["scenarios"].items() if k != args.scenario],
+                         "wan": ["1.1.1.1", "9.9.9.9"]})
+    push_file(vid, "/opt/otlab/probes.json", probes)
+    rc = gexec_long(vid, "cd /opt/otlab/scenario && bash ./test.sh", "/var/log/otlab-test.log", 1500)
+    _, o, e = gexec(vid, "cat /var/log/otlab-test.log", check=False)
+    print(o + e)
+    ent["last_test"] = {"when": datetime.datetime.now().isoformat(timespec="seconds"), "rc": rc}
+    save_manifest(m)
+    os.makedirs(os.path.join(STATE_DIR, "results"), exist_ok=True)
+    with open(os.path.join(STATE_DIR, "results", f"{args.scenario}.txt"), "w") as f:
+        f.write(o + e)
+    sys.exit(rc)
+
+
+def plc_attach(vid, s, ent, m):
+    """Attach net2 to the physical PLC VLAN, set the VM's L2-only address, and refresh the OT-only guard.
+    The VM must be running. Idempotent: safe to call on every start."""
+    if not s.get("plc_ip"):
+        die(f"set scenarios.{s['key']}.plc_ip in otlab.json first")
+    write_fw(s, ent, plc=True)
+    save_manifest(m)
+    cur = vm_config(vid).get("net2", "").split(",")[0]
+    mac = "=" + cur.split("=")[1] if "=" in cur else ""
+    run(["qm", "set", str(vid), "--net2", f"virtio{mac},bridge={CFG['bridge']},tag={CFG['plc']['tag']},firewall=1"])
+    push_file(vid, PLC_NETWORK, f"[Match]\nPath={PLC_PATH}\n\n[Network]\nAddress={s['plc_ip']}\n"
+                                f"LinkLocalAddressing=no\nIPv6AcceptRA=no\n\n[Link]\nRequiredForOnline=no\n")
+    # Refresh the guard so IT/DMZ are fenced off the PLC VLAN as soon as net2 appears (OT reaches it, IT/DMZ do not).
+    push_file(vid, "/usr/local/sbin/otlab-guard", GUARD, "0755")
+    gexec(vid, "networkctl reload; sleep 3; systemctl restart otlab-guard")
+
+
+def plc_detach(vid, s, ent, m):
+    gexec(vid, f"rm -f {PLC_NETWORK}")
+    run(["qm", "set", str(vid), "--delete", "net2"])
+    write_fw(s, ent, plc=False)
+    save_manifest(m)
+    gexec(vid, "networkctl reload; sleep 3")
+
+
+def cmd_plc(args):
+    """Attach/detach the physical PLC NIC (net2, L2-only VLAN, no gateway). Needs the VM running to set its address."""
+    assert_node()
+    m = load_manifest()
+    s, ent = owned(args.scenario, m)
+    vid = s["vmid"]
+    if args.state == "status":
+        print(f"{args.scenario}: plc {plc_state(vm_config(vid))}" + (f" ({s.get('plc_ip')})" if s.get("plc_ip") else ""))
+        return
+    if vm_status(vid) != "running":
+        die("start the scenario first")
+    if args.state == "on":
+        plc_attach(vid, s, ent, m)
+    else:
+        plc_detach(vid, s, ent, m)
+    _, o, _ = gexec(vid, f"ip -br addr show $(ls /sys/bus/pci/devices/0000:00:14.0/virtio*/net/ 2>/dev/null | head -1) 2>/dev/null", check=False)
+    print(f"{args.scenario}: plc {plc_state(vm_config(vid))} {o.strip()}")
+
+
+CAPTURE_SH = r"""set -euo pipefail
+ids=$(docker network ls -q --no-trunc --filter "label=com.docker.compose.network=$NET")
+[ -n "$ids" ] || ids=$(docker network ls -q --no-trunc --filter "name=^${NET}$")
+if [ "$(printf '%s\n' "$ids" | grep -c .)" -ne 1 ]; then
+  echo "no single docker network matches '$NET'; networks in this VM:"
+  docker network ls --format '  {{.Name}} ({{.Driver}})'; exit 3
+fi
+drv=$(docker network inspect -f '{{.Driver}}' "$ids")
+[ "$drv" = bridge ] || { echo "network $NET is $drv; capture only handles bridge networks"; exit 3; }
+IF=$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "$ids")
+[ -n "$IF" ] || IF=br-${ids:0:12}
+ip link show "$IF" >/dev/null
+mkdir -p "$(dirname "$OUT")"
+rc=0; timeout -s INT "$SECS" tcpdump -i "$IF" -nn -s 0 -Z root -w "$OUT" ${FILTER:+"$FILTER"} || rc=$?
+[ $rc -eq 0 ] || [ $rc -eq 124 ] || { echo "tcpdump failed rc=$rc"; exit $rc; }
+chmod 644 "$OUT"
+n=$(tcpdump -nn -r "$OUT" 2>/dev/null | wc -l)
+echo "PCAP $OUT packets=$n bytes=$(stat -c %s "$OUT") sha256=$(sha256sum "$OUT" | cut -d' ' -f1) iface=$IF"
+"""
+
+
+def cmd_capture(args):
+    """Passive capture on one of the scenario's docker bridges, written inside the VM."""
+    assert_node()
+    m = load_manifest()
+    s, ent = owned(args.scenario, m)
+    vid = s["vmid"]
+    if vm_status(vid) != "running":
+        die("start the scenario first")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.net):
+        die(f"bad network name: {args.net}")
+    if not 1 <= args.seconds <= 3600:
+        die("--seconds must be between 1 and 3600")
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = f"/var/lib/otlab/captures/{args.scenario}_{args.net}-{stamp}.pcap"
+    head = "".join(f"{k}={shlex.quote(str(v))}\n" for k, v in
+                   {"NET": args.net, "SECS": args.seconds, "OUT": path, "FILTER": args.filter or ""}.items())
+    push_file(vid, "/opt/otlab/capture.sh", head + CAPTURE_SH, "0755")
+    log = "/var/log/otlab-capture.log"
+    rc = gexec_long(vid, "bash /opt/otlab/capture.sh", log, args.seconds + 120)
+    _, o, e = gexec(vid, f"cat {log}", check=False)
+    print((o + e).strip())
+    sys.exit(rc)
+
+
+def cmd_baseline(args):
+    assert_node()
+    m = load_manifest()
+    s, ent = owned(args.scenario, m)
+    vid = str(s["vmid"])
+    if vm_status(s["vmid"]) != "stopped":
+        die("stop the scenario first; the baseline is taken powered off")
+    if wan_state(vm_config(s["vmid"])) != "DOWN":
+        die("internet NIC is not down")
+    if s.get("plc_ip"):
+        inc = plc_state(vm_config(s["vmid"])) == "ON"
+        print(f"{args.scenario}: baseline will {'INCLUDE' if inc else 'NOT include'} the physical PLC (net2 "
+              f"{'attached' if inc else 'absent'}). `start` reattaches it either way when plc_ip is set.")
+    if "baseline" in ent["snapshots"]:
+        confirm(args.scenario, args, "replace the existing baseline snapshot")
+        run(["qm", "delsnapshot", vid, "baseline"])
+        ent["snapshots"].remove("baseline")
+    run(["qm", "snapshot", vid, "baseline", "--description", f"{MARK} known-good baseline"])
+    ent["snapshots"].append("baseline")
+    ent["phase"] = "ready"
+    save_manifest(m)
+    print(f"{args.scenario}: baseline snapshot taken")
+
+
+def cmd_reset(args):
+    assert_node()
+    m = load_manifest()
+    s, ent = owned(args.scenario, m)
+    if "baseline" not in ent["snapshots"]:
+        die("no baseline snapshot recorded for this scenario")
+    print(f"reset {args.scenario}: stop VM {s['vmid']} ({s['name']}), roll back to snapshot 'baseline'. "
+          f"Everything changed in the VM since the baseline is lost.")
+    confirm(args.scenario, args, "reset")
+    if vm_status(s["vmid"]) == "running":
+        run(["qm", "stop", str(s["vmid"])])
+    run(["qm", "rollback", str(s["vmid"]), "baseline"])
+    set_wan(s, False)
+    msg = f"{args.scenario}: rolled back to baseline, stopped, internet DOWN"
+    if s.get("plc_ip"):
+        msg += ". `start` will reattach the physical PLC (net2 is dropped by the rollback)"
+    print(msg)
+
+
+def cmd_destroy(args):
+    assert_node()
+    m = load_manifest()
+    name = args.scenario
+    s, ent = owned(name, m)
+    if name == "base":
+        deps = [n for n in CFG["scenarios"] if n in m["resources"]]
+        if deps:
+            die(f"scenarios still depend on the template: {', '.join(deps)}")
+    print(f"destroy {name} would remove exactly:")
+    print(f"  VM {s['vmid']} {s['name']} uuid {ent['uuid']}")
+    for d in ent.get("disks", []) + ent.get("cloudinit", []):
+        print(f"  disk {d}")
+    for sn in ent["snapshots"]:
+        print(f"  snapshot {sn}")
+    print(f"  firewall file {ent.get('fw_file')}")
+    confirm(name, args, "destroy")
+    if vm_status(s["vmid"]) == "running":
+        run(["qm", "stop", str(s["vmid"])])
+    run(["qm", "destroy", str(s["vmid"]), "--destroy-unreferenced-disks", "0"])
+    fw = ent.get("fw_file")
+    if fw and os.path.exists(fw) and MARK in open(fw).read().splitlines()[0]:
+        os.remove(fw)
+    del m["resources"][name]
+    save_manifest(m)
+    print(f"{name}: destroyed and removed from manifest")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="otlab")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    names = ["base"] + list(CFG["scenarios"])
+    for c in ("plan", "status"):
+        sp = sub.add_parser(c)
+        sp.add_argument("scenario", nargs="?", choices=names)
+    sp = sub.add_parser("deploy"); sp.add_argument("scenario", choices=names)
+    sp.add_argument("--image"); sp.add_argument("--force", action="store_true"); sp.add_argument("--reinstall", action="store_true")
+    sub.add_parser("seal-base")
+    sp = sub.add_parser("start"); sp.add_argument("scenario", choices=names)
+    sp.add_argument("--force", action="store_true"); sp.add_argument("--allow-multiple", action="store_true")
+    sp.add_argument("--profile", choices=["attack"], help="also start the scenario's attacker tooling")
+    sp.add_argument("--no-plc", action="store_true", help="do not reattach the physical PLC even if plc_ip is set")
+    sp = sub.add_parser("stop"); sp.add_argument("scenario", nargs="?", choices=names); sp.add_argument("--all", action="store_true")
+    sp = sub.add_parser("net"); sp.add_argument("scenario", choices=list(CFG["scenarios"]) + ["base"]); sp.add_argument("state", choices=["on", "off", "status"])
+    sp = sub.add_parser("plc", help="attach/detach the physical PLC NIC (net2)")
+    sp.add_argument("scenario", choices=list(CFG["scenarios"])); sp.add_argument("state", choices=["on", "off", "status"])
+    sp = sub.add_parser("test"); sp.add_argument("scenario", choices=list(CFG["scenarios"]))
+    sp = sub.add_parser("capture", help="pcap of a docker bridge in a running scenario")
+    sp.add_argument("scenario", choices=list(CFG["scenarios"]))
+    sp.add_argument("--net", default="ot", help="compose network name (default: ot)")
+    sp.add_argument("--seconds", type=int, default=60)
+    sp.add_argument("--filter", help="BPF filter, e.g. 'tcp port 502'")
+    for c in ("baseline", "reset", "destroy"):
+        sp = sub.add_parser(c); sp.add_argument("scenario", choices=names); sp.add_argument("--confirm")
+    args = p.parse_args()
+    {"plan": cmd_plan, "status": cmd_status, "deploy": cmd_deploy, "seal-base": cmd_seal_base, "start": cmd_start,
+     "stop": cmd_stop, "net": cmd_net, "plc": cmd_plc, "test": cmd_test, "capture": cmd_capture, "baseline": cmd_baseline, "reset": cmd_reset,
+     "destroy": cmd_destroy}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    main()

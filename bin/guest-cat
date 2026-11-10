@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+"""guest-cat VMID PATH: print a file from a lab VM through the guest agent (runs on the Proxmox node)."""
+import json, subprocess, sys
+r = subprocess.run(["qm", "guest", "exec", sys.argv[1], "--timeout", "30", "--", "cat", sys.argv[2]], capture_output=True, text=True)
+sys.stdout.write(json.loads(r.stdout).get("out-data", ""))
