@@ -41,6 +41,9 @@ for a in 0 1 2; do $MB $PLC write co $a 1 >/dev/null; done; $MB $PLC write co 3 
 note "baseline: reset interlocks, pump and valves commanded on"
 $MB $PLC write co 4 1 >/dev/null; sleep 6
 [ "$(r 20)" = 0 ] && ok "no interlock active after reset" || bad "interlock word $(r 20) after reset"
+# Let the pipeline settle before taking the baseline: right after the modes change, pressure can still be decaying,
+# which made the "pressure rose" check below fail although the process responded.
+for i in $(seq 1 12); do pa=$(r 10); sleep 10; pb=$(r 10); d=$((pa>pb?pa-pb:pb-pa)); [ $((d*33)) -lt "$pb" ] && break; done
 f0=$(r 2); p0=$(r 10)
 [ "$f0" -gt 1000 ] && ok "transfer flow established ($((f0/10)) L/min, pipeline $p0 x0.01 bar)" || bad "no transfer flow ($f0)"
 
