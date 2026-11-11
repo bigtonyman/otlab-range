@@ -18,6 +18,8 @@ for each are in `docs/scenarios/`.
 
 ![oilgas HMI](docs/scenarios/img/oilgas-tank-transfer.png)
 
+![elec one-line diagram](docs/scenarios/img/elec-fuxa-substation.png)
+
 ## Safety
 
 This is a training lab. The scenarios are deliberately weak in places, use upstream default logins, and two of
@@ -93,10 +95,9 @@ Register map: docstring of `plc/plc.py`. Hostnames and addresses: `svc/hosts`.
 ## Known gaps
 
 - The IT/DMZ overlay is built for oilgas, food and chem; elec uses RangerDanger's own enterprise and vendor zones.
-- chem `--profile attack` (Kali, Caldera) is installed but untested.
-- FUXA's own alarm list and trend charts are not configured on the oilgas and elec HMIs; alarms show as lamps.
+- chem `--profile attack` (Kali, Caldera): both start and their web UIs load; the Kali box reaches the plant
+  network and cannot reach the LAN or the internet. No attack exercise has been run end to end.
 - food: the conveyor cannot be stopped from the HMI.
-- The chem acceptance test can fail if run in the first minute after an install (PLC healthy before it serves Modbus).
 - Fidelity: oilgas is lumped first-order dynamics with controller-mediated coupling between tank and pipeline.
 - Built and tested on one node only. The power on/off hook (`host.power` in `otlab.json`) has only been used
   with one setup.
@@ -106,6 +107,8 @@ Register map: docstring of `plc/plc.py`. Hostnames and addresses: `svc/hosts`.
 `bin/` CLI (`otlab` runs on the node, `otlab-host` on your workstation), `base/` template provisioning,
 `scenarios/<name>/` installers, compose overrides, lock files and acceptance tests, `overlay/enterprise/` shared
 IT/DMZ zones, `overlay/site/` DNS, NTP and syslog, `overlay/redteam/` attacker box, `tools/` helpers, `docs/`.
+
+`tools/publish.sh` is the maintainer's script for copying code from a private working copy; you do not need it.
 
 ## Licence
 

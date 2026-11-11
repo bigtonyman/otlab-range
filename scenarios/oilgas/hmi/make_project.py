@@ -73,8 +73,8 @@ def switch(x, y, tid):
 BG, PANEL, LINE, PIPE = "#d9dce0", "#eceef1", "#7b8794", "#4f5b66"
 
 
-def header(title, sub):
-    svg.append(f'<rect x="0" y="0" width="1000" height="620" fill="{BG}" stroke-width="0"/>')
+def header(title, sub, h=620):
+    svg.append(f'<rect x="0" y="0" width="1000" height="{h}" fill="{BG}" stroke-width="0"/>')
     svg.append('<rect x="0" y="0" width="1000" height="46" fill="#2b3440" stroke-width="0"/>')
     svg.append(f'<text x="20" y="30" font-size="19" font-weight="bold" font-family="sans-serif" fill="#ffffff" '
                f'stroke-width="0" xml:space="preserve">{title}</text>')
@@ -125,7 +125,42 @@ def progress(x, y, w, h, tid):
                                "ranges": [{"type": 5, "min": 0, "max": "100", "style": [False, False], "color": "#6f95b8", "stroke": ""}]}}
 
 
-header("TKFARM TERMINAL &#8212; TK-101 TRANSFER TO EXPORT PIPELINE PL-201", "Unit 100 overview")
+charts, alarms = [], []
+
+
+def trend(x, y, w, h, title, lines):
+    """Live trend (FUXA uPlot chart, last 10 minutes). lines: [(tag id, label, colour)]."""
+    global n; n += 1
+    gid, cid = f"HXC_og{n:03d}", f"c_og{n:03d}"
+    charts.append({"id": cid, "name": title, "lines": [{"id": tid, "name": tags[tid]["name"], "device": "og-plc", "color": col,
+                                                         "label": label, "yaxis": 1} for tid, label, col in lines]})
+    svg.append(f'<g id="{gid}" type="svg-ext-html_chart" stroke="#073984" fill="#0B5CD5">'
+               f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="none" stroke-width="0"/>'
+               f'<foreignObject id="H-{gid}" x="{x}" y="{y}" width="{w}" height="{h}">'
+               f'<DIV id="D-{gid}" style="width: 100%; height: 100%;"></DIV></foreignObject></g>')
+    items[gid] = {"id": gid, "type": "svg-ext-html_chart", "name": title, "label": "HtmlChart",
+                  "property": {"id": cid, "type": "realtime1",
+                               "options": {"title": title, "fontFamily": "Roboto-Regular", "legendFontSize": 11,
+                                           "colorBackground": "rgba(247,248,249,1)", "legendBackground": "rgba(0,0,0,0)",
+                                           "titleHeight": 14, "axisLabelFontSize": 10, "labelsDivWidth": 0,
+                                           "axisLineColor": "rgba(79,91,102,1)", "axisLabelColor": "rgba(29,29,29,1)",
+                                           "legendMode": "never", "series": [], "width": w, "height": h,
+                                           "decimalsPrecision": 1, "realtime": 10, "dateFormat": "MM_DD_YYYY",
+                                           "timeFormat": "hh_mm_ss_AA"}}}
+
+
+def alarm(name, tid, bit, text, sev="high", ack="float"):
+    """FUXA alarm on one bit of a status word. sev: highhigh (trip, red) or high (process alarm, amber)."""
+    sub = {"enabled": True, "checkdelay": 1, "timedelay": 0, "min": 1, "max": 1, "text": text, "group": "Unit 100",
+           "ackmode": ack, "bkcolor": "#d92626" if sev == "highhigh" else "#e8a33d", "color": "#ffffff" if sev == "highhigh" else "#1d1d1d"}
+    off = {"enabled": False, "checkdelay": 1, "timedelay": 0, "min": 0, "max": 0, "text": "", "group": "", "ackmode": "float"}
+    a = {"id": f"a_og-{name}", "name": name, "property": {"variableId": tid, "bitmask": 1 << bit, "permission": 0},
+         "highhigh": dict(off), "high": dict(off), "low": dict(off), "info": dict(off), "actions": {"enabled": False, "values": []}}
+    a[sev] = sub
+    alarms.append(a)
+
+
+header("TKFARM TERMINAL &#8212; TK-101 TRANSFER TO EXPORT PIPELINE PL-201", "Unit 100 overview", 940)
 
 # Tags (same ids, addresses and scaling as before).
 T = {name: tag(name, kind, addr, typ) for name, kind, addr, typ in [
@@ -191,10 +226,19 @@ for i, (label, name, addr, unit, scale, dig) in enumerate([("SC-101 pump speed S
                                                            ("PSH-201 trip", "sp_hp", 104, "bar", 0.01, "00")]):
     readout(40 + i * 186, 540, label.upper(), tag(name, "hr", addr, "UInt16"), unit, scale, dig, w=170)
 
-view = {"id": "v_og-main", "name": "Tank transfer", "profile": {"width": 1000, "height": 620, "bkcolor": "#f4f5f7ff", "margin": 10},
+panel(20, 614, 960, 312, "TRENDS (LAST 10 MINUTES)")
+trend(30, 642, 306, 278, "LI-101 level, LIC-101 setpoint  %", [(T["tank_level_pct"], "LI-101", "#2c6fb3"), (T["sp_level"], "LIC-101 SP", "#8a8f98")])
+trend(346, 642, 306, 278, "FI-102 transfer, FI-101 inlet  L/min", [(T["tank_flow_out"], "FI-102 transfer", "#2f8f5b"), (T["tank_flow_in"], "FI-101 inlet", "#b9770e")])
+trend(662, 642, 306, 278, "PI-201 pipeline pressure  bar", [(T["pipe_pressure"], "PI-201", "#b03a2e")])
+for i, (nm, txt) in enumerate([("lshh101", "LSHH-101 tank high-high level: inlet closed"), ("lsll101", "LSLL-101 tank low-low level: P-101 stopped"),
+                                ("psh201", "PSH-201 pipeline high pressure: P-101 stopped"), ("esd", "ESD emergency shutdown active")]):
+    alarm(nm, T["interlock_word"], i, txt, "highhigh", "ackactive")
+
+view = {"id": "v_og-main", "name": "Tank transfer", "profile": {"width": 1000, "height": 940, "bkcolor": "#f4f5f7ff", "margin": 10},
         "items": items, "variables": {},
         "svgcontent": '<svg width="1000" height="620" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" '
                       'xmlns:html="http://www.w3.org/1999/xhtml"><g><title>Layer 1</title>' + "".join(svg) + "</g></svg>"}
+view["svgcontent"] = view["svgcontent"].replace('height="620"', 'height="940"', 1)
 
 # Second screen: alarms, control modes and production. Its tags sit in the same register blocks
 # (HR 0-39, HR 100-110, CO 0-5), so FUXA still polls the controller with three block reads per cycle.
@@ -208,6 +252,7 @@ for i, label in enumerate(["High level (80 %)", "Low level (20 %)", "High pipeli
     lamp(60, y - 5, alm, bit=i, on="#e8a33d")
     lamp(90, y - 5, unack, bit=i, on="#d92626")
     text(110, y, label)
+    alarm(f"alm{i}", alm, i, label)
 text(45, 380, "Acknowledge", 13)
 switch(140, 358, tag("cmd_ack", "co", 5, "Bool"))
 
@@ -262,14 +307,23 @@ if REAL_PLC:
     CDEV = "d_og-click"
     ctags, citems, csvg = {}, {}, []
 
-    def ctag(name, addr):
+    def ctag(name, mem, addr, typ="UInt16", fmt="0"):
         tid = f"t_click-{name}"
         ctags[tid] = {"id": tid, "daq": {"enabled": False, "changed": True, "interval": 60}, "name": name,
-                      "type": "UInt16", "address": str(addr + 1), "memaddress": "400000", "timestamp": ts,
-                      "divisor": None, "format": "00000"}
+                      "type": typ, "address": str(addr + 1), "memaddress": mem, "timestamp": ts,
+                      "divisor": None, "format": fmt}
         return tid
 
-    def cval(x, y, tid):
+    def ctext(x, y, t, size=13, weight="normal"):
+        csvg.append(f'<text x="{x}" y="{y}" font-size="{size}" font-weight="{weight}" font-family="sans-serif" fill="#1d1d1d" '
+                    f'stroke-width="0" xml:space="preserve">{t}</text>')
+
+    def cpanel(x, y, w, h, title):
+        csvg.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{PANEL}" stroke="{LINE}" stroke-width="1"/>')
+        csvg.append(f'<rect x="{x}" y="{y}" width="{w}" height="24" fill="#c3c9d1" stroke="{LINE}" stroke-width="1"/>')
+        ctext(x + 10, y + 17, title, 13, "bold")
+
+    def cval(x, y, tid, unit="", digits=0):
         gid = f"VAL_click{len(citems):03d}"
         csvg.append(f'<g id="{gid}" type="svg-ext-value" fill="#0b3d5c" stroke="#0b3d5c" font-size="18" stroke-width="0" '
                     f'font-family="sans-serif" text-anchor="end"><text id="{gid}t" x="{x}" y="{y}" font-size="18" '
@@ -277,23 +331,50 @@ if REAL_PLC:
         citems[gid] = {"id": gid, "type": "svg-ext-value", "name": ctags[tid]["name"], "label": "Value",
                        "property": {"events": [], "actions": [], "variableId": tid,
                                     "ranges": [{"type": 1, "min": 0, "max": 0, "color": "", "stroke": "", "textId": None,
-                                                "text": "", "fractionDigitsId": None, "fractionDigits": 0}]}}
+                                                "text": unit, "fractionDigitsId": None, "fractionDigits": digits}]}}
 
-    csvg.append('<rect x="0" y="0" width="1000" height="300" fill="#f4f5f7" stroke-width="0"/>')
-    csvg.append('<text x="30" y="40" font-size="20" font-weight="bold" font-family="sans-serif" fill="#1d1d1d" '
-                'stroke-width="0" xml:space="preserve">Electrical intake PLC: AutomationDirect CLICK PLUS</text>')
-    csvg.append(f'<text x="30" y="62" font-size="12" font-family="sans-serif" fill="#1d1d1d" stroke-width="0" '
-                f'xml:space="preserve">Switchgear PLC, read-only. Device-status lamp shows live Modbus comms.</text>')
-    csvg.append('<rect x="30" y="90" width="420" height="160" fill="#ffffff" stroke="#3f4964" stroke-width="1.5"/>')
-    for i, (label, name, addr) in enumerate([("Data register DS1 (raw)", "ds1", 0), ("Data register DS2 (raw)", "ds2", 1)]):
-        yy = 150 + i * 40
-        csvg.append(f'<text x="45" y="{yy}" font-size="14" font-family="sans-serif" fill="#1d1d1d" stroke-width="0" '
-                    f'xml:space="preserve">{label}</text>')
-        cval(430, yy, ctag(name, addr))
+    def clamp(x, y, tid, on="#3fa56b"):
+        gid = f"GSE_click{len(citems):03d}"
+        csvg.append(f'<g id="{gid}" type="svg-ext-gauge_semaphore" fill="#FFFFFF" stroke="#000000">'
+                    f'<ellipse id="{gid}e" cx="{x}" cy="{y}" rx="9" ry="9" fill="#FFFFFF" stroke="#000000"/></g>')
+        citems[gid] = {"id": gid, "type": "svg-ext-gauge_semaphore", "name": ctags[tid]["name"], "label": "HtmlSemaphore",
+                       "property": {"events": [], "actions": [], "variableId": tid,
+                                    "ranges": [{"type": 2, "color": "#b9c0c7", "stroke": "", "min": 0, "max": 0},
+                                               {"type": 2, "color": on, "stroke": "", "min": 1, "max": 1}]}}
+
+    # CLICK Modbus map: X inputs are discrete inputs (slot n at 0x20*n), Y outputs are coils from 0x2000,
+    # DS integers are holding registers from 0, DF floats are holding registers from 0x7000 (low word first).
+    csvg.append(f'<rect x="0" y="0" width="1000" height="430" fill="{BG}" stroke-width="0"/>')
+    csvg.append('<rect x="0" y="0" width="1000" height="46" fill="#2b3440" stroke-width="0"/>')
+    csvg.append('<text x="20" y="30" font-size="19" font-weight="bold" font-family="sans-serif" fill="#ffffff" '
+                'stroke-width="0" xml:space="preserve">ELECTRICAL INTAKE &#8212; SWITCHGEAR PLC (AUTOMATIONDIRECT CLICK PLUS)</text>')
+    csvg.append('<text x="980" y="29" font-size="13" font-family="sans-serif" text-anchor="end" fill="#c5ccd6" '
+                'stroke-width="0" xml:space="preserve">Physical device, monitored read-only</text>')
+    cpanel(20, 58, 300, 352, "STATUS INPUTS (SLOT 2)")
+    for i in range(8):
+        clamp(45, 105 + i * 36, ctag(f"x20{i + 1}", "100000", 0x40 + i, "Bool"))
+        ctext(65, 110 + i * 36, f"X20{i + 1}")
+    cpanel(340, 58, 300, 352, "OUTPUTS")
+    for i in range(4):
+        clamp(365, 105 + i * 36, ctag(f"y00{i + 1}", "000000", 0x2000 + i, "Bool"), on="#d92626")
+        ctext(385, 110 + i * 36, f"Y00{i + 1}  (CPU)")
+        clamp(365, 249 + i * 36, ctag(f"y10{i + 1}", "000000", 0x2020 + i, "Bool"), on="#d92626")
+        ctext(385, 254 + i * 36, f"Y10{i + 1}  (slot 1)")
+    cpanel(660, 58, 320, 352, "MEASUREMENTS AND REGISTERS")
+    for i, (label, name, mem, addr, typ, unit, dig) in enumerate([
+            ("DF1 analog (scaled)", "df1", "400000", 0x7000, "Float32MLE", "", 1),
+            ("DF2", "df2", "400000", 0x7002, "Float32MLE", "", 1),
+            ("DF5 analog (scaled)", "df5", "400000", 0x7008, "Float32MLE", "", 1),
+            ("DF6", "df6", "400000", 0x700A, "Float32MLE", "", 1),
+            ("DS1", "ds1", "400000", 0, "UInt16", "", 0), ("DS2", "ds2", "400000", 1, "UInt16", "", 0),
+            ("DS5", "ds5", "400000", 4, "UInt16", "", 0), ("DS6", "ds6", "400000", 5, "UInt16", "", 0)]):
+        yy = 110 + i * 36
+        ctext(675, yy, label)
+        cval(960, yy, ctag(name, mem, addr, typ, 1 if dig else 0), unit, dig)
     cview = {"id": "v_og-click", "name": "Physical PLC",
-             "profile": {"width": 1000, "height": 300, "bkcolor": "#f4f5f7ff", "margin": 10},
+             "profile": {"width": 1000, "height": 430, "bkcolor": "#f4f5f7ff", "margin": 10},
              "items": citems, "variables": {},
-             "svgcontent": '<svg width="1000" height="300" xmlns="http://www.w3.org/2000/svg" '
+             "svgcontent": '<svg width="1000" height="430" xmlns="http://www.w3.org/2000/svg" '
                            'xmlns:svg="http://www.w3.org/2000/svg" xmlns:html="http://www.w3.org/1999/xhtml">'
                            '<g><title>Layer 1</title>' + "".join(csvg) + "</g></svg>"}
     devices[CDEV] = mbdev(CDEV, "og-click", REAL_PLC, ctags)
@@ -308,7 +389,7 @@ project = {
                        "loginonstart": False, "show_connection_error": True, "inputdialog": "false",
                        "navigation": {"bkcolor": "#F4F5F7", "fgcolor": "#1D1D1D", "logo": False, "mode": "over", "type": "block",
                                       "items": [{"text": v["name"], "link": "", "view": v["id"], "icon": ""} for v in views]},
-                       "header": {"bkcolor": "#ffffff", "fgcolor": "#000000"}}},
-    "charts": [], "graphs": [], "plugin": [], "scripts": [], "alarms": [], "texts": [], "notifications": [], "reports": [],
+                       "header": {"bkcolor": "#ffffff", "fgcolor": "#000000", "alarms": "fix", "infos": "hide"}}},
+    "charts": charts, "graphs": [], "plugin": [], "scripts": [], "alarms": alarms, "texts": [], "notifications": [], "reports": [],
 }
 json.dump(project, sys.stdout)

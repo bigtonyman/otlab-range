@@ -60,7 +60,7 @@ DNP3 next to Modbus on the same devices is the detail worth pointing out: this i
 | Network Map | yes; shows zone subnets, so crop or blur for video | `/console` |
 | Exercises (7 scenarios) | link present; not opened | `/exercises` |
 | containd firewall UI | login page loads; not logged in | `/` (port 9080), also `/containd/` in the portal |
-| FUXA "Substation" view (the only view): one-line diagram of the bus, 52 feeder breaker, 79 recloser, 90 regulator, loads and capacitor bank | yes, live values | `/home` on the HMI's port 1881 |
+| FUXA "Substation" view (the only view): one-line diagram, alarm lamps, three live trends, alarm list behind the header bell; the bus, 52 feeder breaker, 79 recloser, 90 regulator, loads and capacitor bank | yes, live values | `/home` on the HMI's port 1881 |
 
 FUXA is not published on the VM's loopback. Reach it with an SSH forward through the VM to the HMI container's
 management address (the address is in `scenarios/elec/up.sh`). This is missing from the runbook's table.

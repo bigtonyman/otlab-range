@@ -189,8 +189,12 @@ def level_pi(plant, level_pct10, dt):
     err = (level_pct10 - hr(105)[0]) / 10.0           # % of span
     if plant.integral is None:
         plant.integral = hr(100)[0] / 100.0 - kp * err
+    # Keep the integral inside the output range. Without this a seed taken while the level reading was not yet
+    # valid (start-up, comms blip) could sit far outside it and pin the pump at a limit.
+    plant.integral = max(10.0, min(95.0, plant.integral))
     out = kp * err + plant.integral
-    if 10.0 < out < 95.0:                              # anti-windup: integrate only inside the clamp
+    # Anti-windup: at a limit, integrate only in the direction that brings the output back off it.
+    if (out < 95.0 or err < 0) and (out > 10.0 or err > 0):
         plant.integral += kp * err * dt / ti
     out = max(10.0, min(95.0, out))
     set_hr(100, [int(out * 100)])                      # manual output tracks auto

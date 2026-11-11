@@ -86,7 +86,42 @@ def load(x, y, label, kw_tid, lamp_tid):
     readout(x - 56, y + 88, "LOAD", kw_tid, "kW", 1, "0", w=112)
 
 
-svg.append(f'<rect x="0" y="0" width="1000" height="620" fill="{BG}" stroke-width="0"/>')
+charts, alarms = [], []
+
+
+def trend(x, y, w, h, title, lines):
+    """Live trend (FUXA uPlot chart, last 10 minutes). lines: [(tag id, label, colour)]."""
+    global n; n += 1
+    gid, cid = f"HXC_el{n:03d}", f"c_el{n:03d}"
+    charts.append({"id": cid, "name": title, "lines": [{"id": tid, "name": tags[tid]["name"], "device": "el-rtac", "color": col,
+                                                         "label": label, "yaxis": 1} for tid, label, col in lines]})
+    svg.append(f'<g id="{gid}" type="svg-ext-html_chart" stroke="#073984" fill="#0B5CD5">'
+               f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="none" stroke-width="0"/>'
+               f'<foreignObject id="H-{gid}" x="{x}" y="{y}" width="{w}" height="{h}">'
+               f'<DIV id="D-{gid}" style="width: 100%; height: 100%;"></DIV></foreignObject></g>')
+    items[gid] = {"id": gid, "type": "svg-ext-html_chart", "name": title, "label": "HtmlChart",
+                  "property": {"id": cid, "type": "realtime1",
+                               "options": {"title": title, "fontFamily": "Roboto-Regular", "legendFontSize": 11,
+                                           "colorBackground": "rgba(247,248,249,1)", "legendBackground": "rgba(0,0,0,0)",
+                                           "titleHeight": 14, "axisLabelFontSize": 10, "labelsDivWidth": 0,
+                                           "axisLineColor": "rgba(79,91,102,1)", "axisLabelColor": "rgba(29,29,29,1)",
+                                           "legendMode": "never", "series": [], "width": w, "height": h,
+                                           "decimalsPrecision": 1, "realtime": 10, "dateFormat": "MM_DD_YYYY",
+                                           "timeFormat": "hh_mm_ss_AA"}}}
+
+
+def alarm(name, tid, text_, sev="high", ack="float", on=1):
+    """FUXA alarm on a status point. on: the value that means alarm (0 for 'closed' points that should be 1)."""
+    sub = {"enabled": True, "checkdelay": 1, "timedelay": 0, "min": on, "max": on, "text": text_, "group": "Feeder 101",
+           "ackmode": ack, "bkcolor": "#d92626" if sev == "highhigh" else "#e8a33d", "color": "#ffffff" if sev == "highhigh" else "#1d1d1d"}
+    off = {"enabled": False, "checkdelay": 1, "timedelay": 0, "min": 0, "max": 0, "text": "", "group": "", "ackmode": "float"}
+    a = {"id": f"a_el-{name}", "name": name, "property": {"variableId": tid, "permission": 0},
+         "highhigh": dict(off), "high": dict(off), "low": dict(off), "info": dict(off), "actions": {"enabled": False, "values": []}}
+    a[sev] = sub
+    alarms.append(a)
+
+
+svg.append(f'<rect x="0" y="0" width="1000" height="940" fill="{BG}" stroke-width="0"/>')
 svg.append('<rect x="0" y="0" width="1000" height="46" fill="#2b3440" stroke-width="0"/>')
 svg.append('<text x="20" y="30" font-size="19" font-weight="bold" font-family="sans-serif" fill="#ffffff" stroke-width="0" '
            'xml:space="preserve">SUBSTATION &#8212; FEEDER 101 ONE-LINE</text>')
@@ -146,13 +181,28 @@ for i, (label, name, kind, addr, color) in enumerate([
         ("Relay fault", "al_relay", "di", 4, TRIP), ("Recloser lockout", "al_recloser", "di", 7, WARN),
         ("Relay comms", "ok_relay", "co", 7, OK), ("Recloser comms", "ok_recloser", "co", 8, OK),
         ("Regulator comms", "ok_regulator", "co", 9, OK), ("Capacitor bank comms", "ok_capbank", "co", 12, OK)]):
-    y = 350 + i * 25
-    lamp(684, y - 5, tag(name, kind, addr, "Bool"), on=color, r=8)
+    y = 368 + i * 23
+    t_ = tag(name, kind, addr, "Bool")
+    lamp(684, y - 5, t_, on=color, r=8)
     text(704, y, label, 13)
+    if name.startswith("al_"):
+        alarm(name, t_, label, "highhigh" if color == TRIP else "high")
+# The RTAC raises no alarm of its own when the recloser is opened on purpose, so the HMI derives the outage.
+lamp(684, 340, T["general_energized"], on="#b9c0c7", off=TRIP, r=8)
+text(704, 345, "Feeder de-energized (customers out)", 13, "bold")
+alarm("recloser_open", T["recloser_closed"], "79 recloser OPEN: feeder 101 de-energized", "highhigh", "ackactive", on=0)
+alarm("breaker_open", T["breaker_closed"], "52 feeder breaker OPEN", "highhigh", "ackactive", on=0)
+alarm("critical_out", T["critical_energized"], "Critical load offline (hospital, fire station)", "highhigh", "ackactive", on=0)
+alarm("general_out", T["general_energized"], "General load offline (about 2,100 customers)", "high", "float", on=0)
 
-view = {"id": "v_el-main", "name": "Substation", "profile": {"width": 1000, "height": 620, "bkcolor": "#f4f5f7ff", "margin": 10},
+panel(20, 614, 960, 312, "TRENDS (LAST 10 MINUTES)")
+trend(30, 642, 306, 278, "Bus and downstream voltage  V", [(T["bus_voltage"], "Bus", "#8a8f98"), (T["ds_voltage"], "Downstream", "#2c6fb3")])
+trend(346, 642, 306, 278, "50/51 feeder current  A", [(T["feeder_current"], "Feeder", "#b03a2e")])
+trend(662, 642, 306, 278, "General and critical load  kW", [(T["general_kw"], "General", "#2f8f5b"), (T["critical_kw"], "Critical", "#b9770e")])
+
+view = {"id": "v_el-main", "name": "Substation", "profile": {"width": 1000, "height": 940, "bkcolor": "#f4f5f7ff", "margin": 10},
         "items": items, "variables": {},
-        "svgcontent": '<svg width="1000" height="620" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" '
+        "svgcontent": '<svg width="1000" height="940" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" '
                       'xmlns:html="http://www.w3.org/1999/xhtml"><g><title>Layer 1</title>' + "".join(svg) + "</g></svg>"}
 
 rtac_dev = {"id": DEV, "name": "el-rtac", "type": "ModbusTCP", "enabled": True, "polling": 1000,
@@ -168,7 +218,7 @@ project = {
                        "loginonstart": False, "show_connection_error": True, "inputdialog": "false",
                        "navigation": {"bkcolor": "#F4F5F7", "fgcolor": "#1D1D1D", "logo": False, "mode": "over", "type": "block",
                                       "items": [{"text": view["name"], "link": "", "view": view["id"], "icon": ""}]},
-                       "header": {"bkcolor": "#ffffff", "fgcolor": "#000000"}}},
-    "charts": [], "graphs": [], "plugin": [], "scripts": [], "alarms": [], "texts": [], "notifications": [], "reports": [],
+                       "header": {"bkcolor": "#ffffff", "fgcolor": "#000000", "alarms": "fix", "infos": "hide"}}},
+    "charts": charts, "graphs": [], "plugin": [], "scripts": [], "alarms": alarms, "texts": [], "notifications": [], "reports": [],
 }
 json.dump(project, sys.stdout)

@@ -15,6 +15,9 @@ done
 
 PLC=$(docker inspect -f '{{(index .NetworkSettings.Networks "grfics_a-grfics-admin").IPAddress}}' plc)
 note "PLC admin-bridge address $PLC (Modbus/TCP 502)"
+# The PLC container reports healthy before the control program serves Modbus (seen right after an install):
+# wait for a real register read before the checks that depend on it.
+for i in $(seq 1 36); do $MB $PLC read ir 108 >/dev/null 2>&1 && break; sleep 5; done
 
 note "site services (DNS, NTP, syslog, OPC UA server, operator workstation)"
 for c in chem-infra chem-opc chem-ows; do

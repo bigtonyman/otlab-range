@@ -52,9 +52,9 @@ Register map: docstring of `scenarios/oilgas/plc/plc.py`. OPC UA node ids look l
 
 | Screen | Loads | Path |
 |---|---|---|
-| Tank transfer (start view): process graphic with the tank, pump P-101, valves XV-101 and XV-201, instrument readouts, interlock panel, operator commands | yes, live values | `/home` (port 1881) |
+| Tank transfer (start view): process graphic with the tank, pump P-101, valves XV-101 and XV-201, instrument readouts, interlock panel, operator commands, three live trends; the header bell opens the alarm list (11 alarms) | yes, live values | `/home` (port 1881) |
 | Alarms and production | yes, live values | `/home`, side menu, "Alarms and production" |
-| Physical PLC | yes, shows the CLICK's two factory registers (10 and 20) | `/home`, side menu, "Physical PLC" |
+| Physical PLC | yes, live: input and output lamps, analog values and registers read from the board (generic labels; rename them for your own PLC in `hmi/make_project.py`) | `/home`, side menu, "Physical PLC" |
 | Historian mirror | yes, live table | `/` (port 8081) |
 
 The two main screens are a process graphic with instrument tags (same tags, addresses
