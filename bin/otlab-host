@@ -2,7 +2,7 @@
 # Run from your workstation. Runs the otlab CLI on the Proxmox node over SSH; optionally powers the node on/off
 # (host.power in otlab.json).
 #   otlab-host on | off | power      host power (off refuses while any lab VM is running)
-#   otlab-host sync                  copy this repo to /opt/otlab on the node
+#   otlab-host sync                  copy this repo to /opt/otlab on the node, link otlab into /usr/local/bin
 #   otlab-host capture <scenario> [--net ot] [--seconds 60] [--filter BPF]
 #                                    pcap of a docker bridge in a running scenario, pulled to ./captures/
 #   otlab-host <otlab args...>       e.g. otlab-host status, otlab-host start chem
@@ -24,7 +24,8 @@ case "${1:-}" in
   off)   if ssh -o BatchMode=yes $NODE 'qm list | awk "\$1>=9200 && \$1<=9299 && \$3==\"running\"" | grep -q .'; then
            echo "REFUSING: a lab VM is still running; run: otlab-host stop --all" >&2; exit 2; fi
          power off ;;
-  sync)  rsync -a --delete --exclude .git --exclude captures "$HERE/" $NODE:/opt/otlab/ && echo synced ;;
+  sync)  rsync -a --delete --exclude .git --exclude captures "$HERE/" $NODE:/opt/otlab/ &&
+         ssh -o BatchMode=yes $NODE 'ln -sfn /opt/otlab/bin/otlab /usr/local/bin/otlab' && echo synced ;;
   capture) shift; sc=${1:?usage: otlab-host capture <scenario> [--net ot] [--seconds 60] [--filter BPF]}
          res=$(ssh -o BatchMode=yes $NODE otlab capture "$(printf '%q ' "$@")") || { echo "$res" >&2; exit 1; }
          line=$(grep '^PCAP ' <<<"$res" | tail -1); [ -n "$line" ] || { echo "$res" >&2; exit 1; }

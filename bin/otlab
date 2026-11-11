@@ -91,6 +91,24 @@ def assert_node():
         die(f"storage {CFG['storage']} is forbidden")
 
 
+DC_FW = "/etc/pve/firewall/cluster.fw"
+
+
+def dc_firewall_on():
+    """Proxmox applies per-VM firewall rules only when the datacenter firewall is enabled."""
+    try:
+        text = open(DC_FW).read()
+    except OSError:
+        return False
+    opts = text.split("[OPTIONS]", 1)[1].split("[", 1)[0] if "[OPTIONS]" in text else ""
+    return re.search(r"^\s*enable:\s*1\s*$", opts, re.M) is not None
+
+
+DC_FW_HELP = (f"the datacenter firewall is off, so the per-VM DROP rules would not be applied. Enable it "
+              f"(Datacenter > Firewall > Options > Firewall: Yes, or 'enable: 1' under [OPTIONS] in {DC_FW}) "
+              f"after making sure its default policies will not lock you out of the node")
+
+
 def cluster_vms():
     data = json.loads(out(["pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json"]))
     return {int(r["vmid"]): r for r in data}
@@ -329,6 +347,8 @@ def cmd_plan(args):
           f"net1 {CFG['bridge']} tag {CFG['wan']['tag']} (internet toggle, link down by default); onboot 0.")
     print("Firewall file that deploy writes for each VM:\n")
     print(fw_text(spec(names[-1])))
+    if not dc_firewall_on():
+        print(f"WARNING: {DC_FW_HELP}. deploy will refuse until it is on.")
 
 
 def cmd_status(args):
@@ -420,13 +440,16 @@ def cmd_deploy(args):
         owned(name, m)
         print(f"{name} already deployed and ready (idempotent no-op). Use reset to restore the baseline.")
         return
+    if not dc_firewall_on():
+        die(DC_FW_HELP)
     if name == "base":
         if not ent:
             if not args.image:
                 die("deploy base needs --image /path/to/debian-cloud.qcow2")
             s, ent = create_vm("base", m, args.image)
-        print(f"base VM {s['vmid']} created. Start it, provision it with base/bootstrap.sh from your workstation, "
-              f"then run: otlab seal-base")
+        print(f"base VM {s['vmid']} created. Next, on the node: qm start {s['vmid']} && otlab net base on. "
+              f"From your workstation, once otlab@{s['ip']} answers SSH: base/bootstrap.sh <node-ip> {s['ip']}. "
+              f"Then on the node: qm shutdown {s['vmid']} && otlab seal-base")
         return
     if in_backup_window() and not args.force:
         die("inside the nightly backup window; the host may be powered off when backups finish. Retry later or use --force")
@@ -466,7 +489,8 @@ def cmd_deploy(args):
     ent["images"] = lock.splitlines()
     ent["phase"] = "installed"
     save_manifest(m)
-    print(f"{name}: installed. Next: otlab test {name}, then otlab baseline {name}.")
+    print(f"{name}: installed; its containers are created but not running. "
+          f"Next: otlab start {name}, otlab test {name}, otlab stop {name}, then otlab baseline {name}.")
 
 
 def cmd_seal_base(args):

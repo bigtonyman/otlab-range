@@ -29,8 +29,12 @@ not expose any of it to a network you care about.
 ## Requirements
 
 - One Proxmox VE node (built on PVE 9) with about 16 GB RAM free and 250 GB on a ZFS or LVM-thin storage.
+- The datacenter firewall enabled (Datacenter > Firewall > Options > Firewall: Yes). Proxmox ignores the
+  per-VM rules that isolate the lab while it is off, and `deploy` refuses until it is on. A fresh install has
+  it off; check its default policies first so enabling it does not lock you out of the node.
 - A VLAN-aware bridge with a management VLAN, and a second VLAN that can reach the internet for installs.
-- A Debian 13 cloud image for the base template.
+- A Debian 13 cloud image for the base template, on the node, for example
+  `curl -o /var/lib/vz/template/debian-13-genericcloud-amd64.qcow2 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2`.
 - A workstation with an SSH client, `rsync` and `python3`, and root key access to the node.
 - Optional: a physical Modbus/TCP PLC on its own L2-only VLAN (oilgas can show it read-only).
 
@@ -39,18 +43,28 @@ not expose any of it to a network you care about.
 1. Copy `otlab.example.json` to `otlab.json` and edit it: node name, storage, VLAN tags, addresses, and which
    workstations may connect.
 2. Put the public key of your workstation in `base/authorized_keys` (one key per line).
-3. Run the following from the repo:
+3. Run the following from the repo. `<node>` is your node's SSH address and `9200` the base `vmid` from
+   `otlab.json`:
 
 ```bash
-bin/otlab-host sync                     # copies the repo to /opt/otlab on the node
-bin/otlab-host plan                     # shows what would be created; changes nothing
+bin/otlab-host sync                     # copies the repo to /opt/otlab and links otlab into /usr/local/bin
+bin/otlab-host plan                     # shows what would be created; changes nothing; warns if the firewall is off
+
+# Base template, once
 bin/otlab-host deploy base --image /var/lib/vz/template/debian-13-genericcloud-amd64.qcow2
-base/bootstrap.sh <node-ip> <base-vm-ip> && bin/otlab-host seal-base
+ssh root@<node> qm start 9200 && bin/otlab-host net base on
+base/bootstrap.sh <node-ip> <base-vm-ip>   # wait until otlab@<base-vm-ip> answers SSH (a minute or two)
+ssh root@<node> qm shutdown 9200 && bin/otlab-host seal-base
+
+# Each scenario
 bin/otlab-host deploy oilgas            # internet on for the install, off again afterwards
+bin/otlab-host start oilgas             # deploy leaves the containers created but not running
 bin/otlab-host test oilgas              # acceptance test
 bin/otlab-host stop oilgas && bin/otlab-host baseline oilgas --confirm oilgas
 bin/otlab-host start oilgas             # one scenario at a time
 ```
+
+`otlab start` and `otlab stop` take scenarios only, which is why the base VM is started and shut down with `qm`.
 
 `docs/RUNBOOK.md` covers day-to-day use, port-forwards for each HMI, captures, reset and removal.
 `otlab.json` and `base/authorized_keys` are git-ignored so your site details stay local.
